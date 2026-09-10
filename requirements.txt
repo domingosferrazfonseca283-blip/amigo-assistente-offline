@@ -1,0 +1,2 @@
+# Dependências do núcleo. O backend do modelo local será adicionado conforme o modelo escolhido.
+# A primeira versão usa somente a biblioteca padrão do Python.
