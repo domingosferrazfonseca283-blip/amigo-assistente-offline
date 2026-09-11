@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .episodic_memory import EpisodicMemory
 from .memory_association import AssociativeMemory, MemoryNode
+from .relational_learning import RelationalLearningEngine, RelationalLearningResult
 from .semantic_memory import SemanticMemory
 
 
@@ -11,10 +12,15 @@ from .semantic_memory import SemanticMemory
 class MemoryConsolidationResult:
     nodes_created: int
     links_created: int
+    patterns_found: int = 0
+    links_reinforced: int = 0
 
 
 class MemoryConsolidator:
-    """Converte episódios e crenças em uma rede associativa local."""
+    """Converte experiências em rede e aprende relações recorrentes localmente."""
+
+    def __init__(self) -> None:
+        self.relational = RelationalLearningEngine()
 
     def consolidate(self, episodes: EpisodicMemory, semantic: SemanticMemory, associations: AssociativeMemory) -> MemoryConsolidationResult:
         nodes_before = len(associations.nodes)
@@ -42,4 +48,10 @@ class MemoryConsolidator:
             associations.add_node(MemoryNode(subject_id, "entity", belief.subject, 0.65))
             associations.connect(subject_id, fact_id, "possui-crença", weight=belief.confidence, evidence=[belief.id])
 
-        return MemoryConsolidationResult(len(associations.nodes) - nodes_before, len(associations.links) - links_before)
+        learned: RelationalLearningResult = self.relational.learn(episodes, associations)
+        return MemoryConsolidationResult(
+            len(associations.nodes) - nodes_before,
+            len(associations.links) - links_before,
+            learned.patterns_found,
+            learned.links_reinforced,
+        )
