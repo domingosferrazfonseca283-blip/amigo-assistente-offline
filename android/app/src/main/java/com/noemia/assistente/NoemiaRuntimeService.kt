@@ -24,9 +24,11 @@ class NoemiaRuntimeService : Service() {
         // sem HTTP e sem depender de um serviço remoto.
         coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge())
         coordinator.start()
-        internalScheduler = InternalCognitionScheduler {
-            coordinator.internalCycle("reflect")
-        }
+        internalScheduler = InternalCognitionScheduler(
+            onCycle = {
+                coordinator.internalCycle("reflect")
+            }
+        )
         internalScheduler.start()
         voiceOutput = NoemiaVoiceOutput(applicationContext)
     }
