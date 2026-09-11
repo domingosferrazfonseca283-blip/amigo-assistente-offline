@@ -7,5 +7,6 @@ interface CognitiveBridge {
     fun restore(snapshot: JSONObject?)
     fun perceive(kind: String, payload: JSONObject)
     fun converse(text: String): String
+    fun internalCycle(activity: String = "reflect")
     fun snapshot(): JSONObject
 }
