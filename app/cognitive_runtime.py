@@ -72,23 +72,16 @@ class CognitiveRuntime:
         self.workspace = GlobalWorkspace()
         self.bus.subscribe(EventType.USER_MESSAGE, self._handle_user_message)
 
+    def _register_internal_capabilities(self) -> None:
+        self.agency.register_capability(ActionCapability("internal_reflection", ActionRisk.NONE, PermissionMode.ALLOW, background_allowed=True))
+        self.agency.register_capability(ActionCapability("store_memory", ActionRisk.LOW, PermissionMode.ALLOW, background_allowed=True))
+
     def internal_tick(self) -> DriveContext:
         drive = self.being.internal_tick()
         context = DriveContext.from_being(self.being)
         if drive is not None:
-            self.workspace.submit(
-                f"Impulso interno: {drive.name} ({drive.intensity:.2f})",
-                WorkspaceKind.SELF_SIGNAL,
-                salience=drive.intensity,
-                confidence=0.9,
-                source="being",
-            )
-            self.bus.publish(CognitiveEvent(
-                EventType.REFLECTION,
-                {"kind": "internal_drive", "drive": drive.name, "intensity": drive.intensity, "focus": drive.suggested_focus},
-                source="being",
-                importance=max(0.3, drive.intensity),
-            ))
+            self.workspace.submit(f"Impulso interno: {drive.name} ({drive.intensity:.2f})", WorkspaceKind.SELF_SIGNAL, salience=drive.intensity, confidence=0.9, source="being")
+            self.bus.publish(CognitiveEvent(EventType.REFLECTION, {"kind": "internal_drive", "drive": drive.name, "intensity": drive.intensity, "focus": drive.suggested_focus}, source="being", importance=max(0.3, drive.intensity)))
         return context
 
     def perceive(self, text: str) -> None:
@@ -100,21 +93,15 @@ class CognitiveRuntime:
         text = str(event.payload.get("text", "")).strip()
         if not text:
             return
-        self.state.touch()
-        self.state.turn_count += 1
-        self.being.experience(event)
-        self.affect.on_input(text)
+        self.state.touch(); self.state.turn_count += 1; self.being.experience(event); self.affect.on_input(text)
         topics = self._extract_topics(text)
         episode = self.episodic.record("Interação recebida: " + text, {"event_id": event.id, "role": "user"}, importance=event.importance, emotional_salience=self.state.affect.novelty, source="perception")
         self.associations.add_node(MemoryNode(episode.id, "episode", episode.summary, episode.salience))
         self.timeline.record(episode.summary, source="perception", importance=event.importance, tags=topics, event_id=episode.id, timestamp=episode.timestamp)
-        self.relationship.observe(text, topics=topics, important=event.importance >= 0.9, episode_id=episode.id)
-        self.world.observe_user_statement(text, confidence=0.95)
+        self.relationship.observe(text, topics=topics, important=event.importance >= 0.9, episode_id=episode.id); self.world.observe_user_statement(text, confidence=0.95)
         self.workspace.submit(episode.summary, WorkspaceKind.MEMORY, salience=episode.salience, confidence=0.85, source="episodic_memory")
-        for goal in self.goals.active()[:6]:
-            self.workspace.submit(f"{goal.title} (progresso={goal.progress:.2f})", WorkspaceKind.GOAL, salience=goal.priority, confidence=0.95, source="goal_manager")
-        self.state.working_memory.append({"type": "user", "text": text, "event_id": event.id})
-        self.state.working_memory = self.state.working_memory[-24:]
+        for goal in self.goals.active()[:6]: self.workspace.submit(f"{goal.title} (progresso={goal.progress:.2f})", WorkspaceKind.GOAL, salience=goal.priority, confidence=0.95, source="goal_manager")
+        self.state.working_memory.append({"type": "user", "text": text, "event_id": event.id}); self.state.working_memory = self.state.working_memory[-24:]
 
     @staticmethod
     def _extract_topics(text: str) -> list[str]:
@@ -123,146 +110,74 @@ class CognitiveRuntime:
         return list(dict.fromkeys(word for word in words if len(word) >= 5 and word not in stop))[:8]
 
     def create_goal(self, title: str, priority: float = 0.5, source: str = "user"):
-        goal = self.goals.add(title, priority, source)
-        self.state.active_goals = [g.id for g in self.goals.active()]
+        goal = self.goals.add(title, priority, source); self.state.active_goals = [g.id for g in self.goals.active()]
         self.workspace.submit(f"{goal.title} (progresso={goal.progress:.2f})", WorkspaceKind.GOAL, salience=goal.priority, confidence=0.95, source="goal_manager")
-        self.bus.publish(CognitiveEvent(EventType.GOAL_CREATED, {"id": goal.id, "title": goal.title, "priority": goal.priority}, source="goal_manager", importance=0.8))
-        self.agency.plan_for(goal)
+        self.bus.publish(CognitiveEvent(EventType.GOAL_CREATED, {"id": goal.id, "title": goal.title, "priority": goal.priority}, source="goal_manager", importance=0.8)); self.agency.plan_for(goal)
         return goal
 
     def maybe_create_internal_goal(self, title: str, priority: float = 0.7):
-        if not self.autonomy.should_create_goal(priority):
-            return None
+        if not self.autonomy.should_create_goal(priority): return None
         return self.create_goal(title, priority, source="autonomy")
 
     def _choose_goal(self, drive_context: DriveContext | None = None):
         active = self.goals.active()
-        if not active:
-            return None, None
-        dominant = drive_context.dominant if drive_context else self.being.strongest_drive()
-        choices = []
+        if not active: return None, None
+        dominant = drive_context.dominant if drive_context else self.being.strongest_drive(); choices = []
         for goal in active[:8]:
-            score = max(0.0, min(1.0, goal.priority * 0.8 + (1.0 - goal.progress) * 0.2))
-            reasons = [f"prioridade={goal.priority:.2f}", f"progresso={goal.progress:.2f}"]
-            if dominant is not None:
-                focus_match = dominant.suggested_focus.lower() in goal.title.lower() or dominant.name.lower() in goal.title.lower()
-                if focus_match:
-                    score = min(1.0, score + 0.15 * dominant.intensity)
-                    reasons.append(f"alinhamento_impulso={dominant.name}")
+            score = max(0.0, min(1.0, goal.priority * 0.8 + (1.0 - goal.progress) * 0.2)); reasons = [f"prioridade={goal.priority:.2f}", f"progresso={goal.progress:.2f}"]
+            if dominant is not None and (dominant.suggested_focus.lower() in goal.title.lower() or dominant.name.lower() in goal.title.lower()):
+                score = min(1.0, score + 0.15 * dominant.intensity); reasons.append(f"alinhamento_impulso={dominant.name}")
             choices.append(Choice(goal.id, score, reasons))
-        for choice in choices:
-            choice.score = self.decision_learning.score("priorização de objetivos", choice.option, choice.score)
-        decision = self.autonomy.choose("priorização de objetivos", choices)
-        chosen = next((g for g in active if decision.chosen and g.id == decision.chosen.option), None)
-        if decision.chosen:
-            self.workspace.submit(f"Escolha: {decision.chosen.option}", WorkspaceKind.GOAL, salience=decision.chosen.score, confidence=decision.chosen.score, source="autonomy")
+        for choice in choices: choice.score = self.decision_learning.score("priorização de objetivos", choice.option, choice.score)
+        decision = self.autonomy.choose("priorização de objetivos", choices); chosen = next((g for g in active if decision.chosen and g.id == decision.chosen.option), None)
+        if decision.chosen: self.workspace.submit(f"Escolha: {decision.chosen.option}", WorkspaceKind.GOAL, salience=decision.chosen.score, confidence=decision.chosen.score, source="autonomy")
         return chosen or active[0], decision
 
     def evaluate_initiative(self, context: str = "inatividade"):
-        drive_context = self.internal_tick()
-        goal, decision = self._choose_goal(drive_context)
-        if goal is None:
-            return None
+        drive_context = self.internal_tick(); goal, decision = self._choose_goal(drive_context)
+        if goal is None: return None
         initiative = self.initiative.evaluate(context=context, goal=goal)
         if initiative is not None:
             self.workspace.submit(f"Iniciativa: {initiative.action}", WorkspaceKind.POSSIBILITY, salience=0.75, confidence=0.7, source="initiative")
             self.bus.publish(CognitiveEvent(EventType.ACTION_REQUESTED, {"action": initiative.action, "goal_id": initiative.goal_id, "requires_confirmation": initiative.requires_confirmation, "reason": initiative.reason, "decision_id": decision.id if decision else None}, source="initiative", importance=0.75))
         return initiative
 
-    def approve_initiative(self, index: int = 0):
-        return self.initiative.approve(index)
-
-    def expect_state(self, subject: str, predicate: str, expected: object, confidence: float = 0.5, source: str = "prediction", evidence: list[str] | None = None):
-        expectation = self.expectations.expect(subject, predicate, expected, confidence, source, evidence=evidence)
-        self.workspace.submit(f"Expectativa: {subject}.{predicate} = {expected}", WorkspaceKind.EXPECTATION, salience=confidence, confidence=confidence, source="expectation")
-        return expectation
+    def approve_initiative(self, index: int = 0): return self.initiative.approve(index)
 
     def run_consolidation(self):
         report = self.consolidator.run()
         from .memory_consolidation import MemoryConsolidator
-        graph_report = MemoryConsolidator().consolidate(self.episodic, self.semantic, self.associations)
-        temporal_report = self.temporal_reasoning.analyze(self.episodic, self.relationship, self.timeline)
-        for change in self.state_history.recent_changes(limit=20):
-            self.timeline.relate(change.evidence[0] if change.evidence else change.id, change.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
+        graph_report = MemoryConsolidator().consolidate(self.episodic, self.semantic, self.associations); temporal_report = self.temporal_reasoning.analyze(self.episodic, self.relationship, self.timeline)
+        for change in self.state_history.recent_changes(limit=20): self.timeline.relate(change.evidence[0] if change.evidence else change.id, change.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
         self.workspace.submit("Consolidação da memória e aprendizagem", WorkspaceKind.SELF_SIGNAL, salience=0.65, confidence=0.9, source="consolidation")
-        self.state.reflections.append(f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}; tempo: {temporal_report.events_linked} ligações, {temporal_report.repetitions_found} repetições, {temporal_report.possible_changes} mudanças possíveis; histórico: {len(self.state_history.changes)} mudanças; decisões aprendidas: {len(self.decision_learning.outcomes)}; expectativas: {len(self.expectations.results)} resultados")
-        self.state.reflections = self.state.reflections[-100:]
-        self.being.experience(CognitiveEvent(EventType.CONSOLIDATION, {"kind": "internal_consolidation"}, source="consolidation", importance=0.6))
-        self.bus.publish(CognitiveEvent(EventType.CONSOLIDATION, {"memory": report.__dict__, "graph": graph_report.__dict__, "temporal": temporal_report.__dict__, "changes": len(self.state_history.changes), "decisions": len(self.decision_learning.outcomes), "expectations": len(self.expectations.results)}, source="consolidation", importance=0.6))
-        return report
-
-    def learn_user_fact(self, subject: str, predicate: str, value: object):
-        belief = self.semantic.learn_user_fact(subject, predicate, value)
-        episode = self.episodic.record(f"Facto fornecido pelo utilizador: {subject} {predicate} {value}", {"subject": subject, "predicate": predicate, "value": value}, importance=0.9, source="user_fact")
-        self.timeline.record(episode.summary, source="user_fact", importance=0.9, tags=[subject, predicate], event_id=episode.id, timestamp=episode.timestamp)
-        self.workspace.submit(episode.summary, WorkspaceKind.MEMORY, salience=0.9, confidence=belief.confidence, source="user_fact")
-        change = self.change_detector.ingest_belief(self.state_history, subject=subject, predicate=predicate, value=value, confidence=belief.confidence, source="user_fact", evidence=[belief.id, episode.id])
-        expectation_result = self.expectations.observe(subject, predicate, value, evidence=[belief.id, episode.id], confidence=belief.confidence)
-        if expectation_result is not None:
-            self.workspace.submit(f"Surpresa={expectation_result.surprise:.2f}: esperado={expectation_result.expected}, observado={expectation_result.observed}", WorkspaceKind.EXPECTATION, salience=max(0.35, expectation_result.surprise), confidence=expectation_result.confidence, source="expectation")
-            self.bus.publish(CognitiveEvent(EventType.REFLECTION, {"expectation_id": expectation_result.expectation_id, "expected": expectation_result.expected, "observed": expectation_result.observed, "surprise": expectation_result.surprise, "matched": expectation_result.matched, "status": expectation_result.status.value}, source="expectation", importance=max(0.3, expectation_result.surprise)))
-        if change is not None:
-            self.timeline.relate(change.evidence[0], episode.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
-            self.bus.publish(CognitiveEvent(EventType.WORLD_UPDATED, {"subject": subject, "property": predicate, "old": change.old_value, "new": change.new_value, "change_id": change.id, "permanence": change.permanence.value}, source="state_history", importance=0.85))
-        return belief
+        self.state.reflections.append(f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}; tempo: {temporal_report.events_linked} ligações, {temporal_report.repetitions_found} repetições, {temporal_report.possible_changes} mudanças possíveis; histórico: {len(self.state_history.changes)} mudanças; decisões aprendidas: {len(self.decision_learning.outcomes)}; expectativas: {len(self.expectations.results)} resultados"); self.state.reflections = self.state.reflections[-100:]
+        self.being.experience(CognitiveEvent(EventType.CONSOLIDATION, {"kind": "internal_consolidation"}, source="consolidation", importance=0.6)); self.bus.publish(CognitiveEvent(EventType.CONSOLIDATION, {"memory": report.__dict__, "graph": graph_report.__dict__, "temporal": temporal_report.__dict__, "changes": len(self.state_history.changes), "decisions": len(self.decision_learning.outcomes), "expectations": len(self.expectations.results)}, source="consolidation", importance=0.6)); return report
 
     def think(self, user_text: str) -> str:
-        self.workspace.clear_cycle()
-        self.expectations.expire()
-        self.workspace.submit(user_text, WorkspaceKind.PERCEPTION, salience=0.9, confidence=0.98, source="user")
-        context = self._retrieve_context(user_text)
-        drive_context = self.internal_tick()
-        goal, decision = self._choose_goal(drive_context)
-        initiative = self.agency.request_initiative(goal, "durante interação") if goal else None
-        if initiative:
-            self.workspace.submit(f"Proposta: {initiative.action}", WorkspaceKind.POSSIBILITY, salience=0.7, confidence=0.7, source="initiative")
-        self.workspace.compete(curiosity=self.state.affect.curiosity, uncertainty=self.state.affect.uncertainty, novelty=self.state.affect.novelty)
-        context["workspace"] = self.workspace.active_context()
-        context["drive"] = [drive_context.reason, drive_context.focus] if drive_context.dominant else []
-        prompt = self._compose_context(user_text, context, goal.title if goal else None, initiative.action if initiative else None)
-        self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None, "decision_id": decision.id if decision else None, "focus": self.workspace.active_context(), "drive": drive_context.reason}, source="runtime"))
-        try:
-            response = self.model.generate(prompt).strip()
+        self.workspace.clear_cycle(); self.expectations.expire(); self.workspace.submit(user_text, WorkspaceKind.PERCEPTION, salience=0.9, confidence=0.98, source="user")
+        context = self._retrieve_context(user_text); drive_context = self.internal_tick(); goal, decision = self._choose_goal(drive_context); initiative = self.agency.request_initiative(goal, "durante interação") if goal else None
+        if initiative: self.workspace.submit(f"Proposta: {initiative.action}", WorkspaceKind.POSSIBILITY, salience=0.7, confidence=0.7, source="initiative")
+        self.workspace.compete(curiosity=self.state.affect.curiosity, uncertainty=self.state.affect.uncertainty, novelty=self.state.affect.novelty); context["workspace"] = self.workspace.active_context(); context["drive"] = [drive_context.reason, drive_context.focus] if drive_context.dominant else []
+        prompt = self._compose_context(user_text, context, goal.title if goal else None, initiative.action if initiative else None); self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None, "decision_id": decision.id if decision else None, "focus": self.workspace.active_context(), "drive": drive_context.reason}, source="runtime"))
+        try: response = self.model.generate(prompt).strip()
         except Exception as exc:
-            self.affect.on_failure()
-            self.episodic.record("Falha durante geração local", {"success": False, "error": type(exc).__name__, "input": user_text}, importance=0.7, source="runtime")
-            if decision and decision.chosen:
-                self.decision_learning.record_outcome(decision.id, decision.goal, decision.chosen.option, decision.chosen.score, -0.5, False)
-            self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": False, "error": type(exc).__name__}, source="runtime"))
-            raise
-        if not response:
-            response = "Estou aqui. Vamos continuar."
-        self.affect.on_success()
-        self.memory.add("user", user_text)
-        self.memory.add("assistant", response)
-        response_episode = self.episodic.record("Resposta e experiência de interação", {"input": user_text, "output": response, "success": True}, importance=0.65, emotional_salience=self.state.affect.novelty, source="runtime")
-        self.timeline.record(response_episode.summary, source="runtime", importance=0.65, tags=self._extract_topics(user_text), event_id=response_episode.id, timestamp=response_episode.timestamp)
-        self.state.working_memory.append({"type": "assistant", "text": response})
-        self.state.working_memory = self.state.working_memory[-24:]
-        self.being.experience(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7))
-        if decision and decision.chosen:
-            self.decision_learning.record_outcome(decision.id, decision.goal, decision.chosen.option, decision.chosen.score, 0.25, True, [response_episode.id])
-        self.workspace.submit("Resposta produzida e experiência registada", WorkspaceKind.SELF_SIGNAL, salience=0.65, confidence=0.9, source="runtime")
-        self.bus.publish(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7))
-        self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": True, "input": user_text, "output": response, "focus": self.workspace.active_context()}, source="runtime"))
-        return response
+            self.affect.on_failure(); self.episodic.record("Falha durante geração local", {"success": False, "error": type(exc).__name__, "input": user_text}, importance=0.7, source="runtime")
+            if decision and decision.chosen: self.decision_learning.record_outcome(decision.id, decision.goal, decision.chosen.option, decision.chosen.score, -0.5, False)
+            self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": False, "error": type(exc).__name__}, source="runtime")); raise
+        if not response: response = "Estou aqui. Vamos continuar."
+        self.affect.on_success(); self.memory.add("user", user_text); self.memory.add("assistant", response)
+        response_episode = self.episodic.record("Resposta e experiência de interação", {"input": user_text, "output": response, "success": True}, importance=0.65, emotional_salience=self.state.affect.novelty, source="runtime"); self.timeline.record(response_episode.summary, source="runtime", importance=0.65, tags=self._extract_topics(user_text), event_id=response_episode.id, timestamp=response_episode.timestamp)
+        self.state.working_memory.append({"type": "assistant", "text": response}); self.state.working_memory = self.state.working_memory[-24:]; self.being.experience(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7))
+        if decision and decision.chosen: self.decision_learning.record_outcome(decision.id, decision.goal, decision.chosen.option, decision.chosen.score, 0.25, True, [response_episode.id])
+        self.workspace.submit("Resposta produzida e experiência registada", WorkspaceKind.SELF_SIGNAL, salience=0.65, confidence=0.9, source="runtime"); self.bus.publish(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7)); self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": True, "input": user_text, "output": response, "focus": self.workspace.active_context()}, source="runtime")); return response
 
     def _retrieve_context(self, query: str) -> dict[str, list[str]]:
-        memories = self.memory.recent(limit=16)
-        matches = self.memory_retriever.retrieve(query, MemoryContext(topics=self._extract_topics(query)), limit=10)
-        episodes = [f"{m.item.summary}" for m in matches if m.kind == "episode"]
-        beliefs = [f"{m.item.subject} | {m.item.predicate} | {m.item.value} (confiança={m.item.confidence:.2f})" for m in matches if m.kind == "belief"]
-        world = [f"{f.subject} | {f.predicate} | {f.value} (confiança={f.confidence:.2f})" for f in self.world.relevant(query)]
-        knowledge: list[str] = []
+        memories = self.memory.recent(limit=16); matches = self.memory_retriever.retrieve(query, MemoryContext(topics=self._extract_topics(query)), limit=10)
+        episodes = [m.item.summary for m in matches if m.kind == "episode"]; beliefs = [f"{m.item.subject} | {m.item.predicate} | {m.item.value} (confiança={m.item.confidence:.2f})" for m in matches if m.kind == "belief"]; world = [f"{f.subject} | {f.predicate} | {f.value} (confiança={f.confidence:.2f})" for f in self.world.relevant(query)]; knowledge: list[str] = []
         if self.knowledge is not None:
             try: knowledge = self.knowledge.search(query, limit=8)
             except Exception: knowledge = []
-        relationship = [f"familiaridade={self.relationship.relationship.familiarity:.2f}", f"continuidade={self.relationship.relationship.continuity_score:.2f}", "tópicos partilhados=" + ", ".join(sorted(self.relationship.relationship.shared_topics, key=self.relationship.relationship.shared_topics.get, reverse=True)[:8])]
-        temporal = [f"{item.timestamp}: {item.summary}" for item in self.timeline.recent(8)]
-        changes = [f"{c.subject}.{c.property}: {c.old_value} → {c.new_value} ({c.permanence.value}, confiança={c.confidence:.2f})" for c in self.state_history.recent_changes(8)]
-        decisions = [f"{o.goal} → {o.option}: recompensa={o.reward:.2f}, sucesso={o.success}" for o in self.decision_learning.recent(8)]
-        expectations = [f"{e.subject}.{e.property} → {e.expected} (confiança={e.confidence:.2f}, fonte={e.source})" for e in self.expectations.active(8)]
-        surprise = [f"esperado={r.expected} | observado={r.observed} | surpresa={r.surprise:.2f} | {r.status.value}" for r in self.expectations.recent_results(8)]
+        relationship = [f"familiaridade={self.relationship.relationship.familiarity:.2f}", f"continuidade={self.relationship.relationship.continuity_score:.2f}", "tópicos partilhados=" + ", ".join(sorted(self.relationship.relationship.shared_topics, key=self.relationship.relationship.shared_topics.get, reverse=True)[:8])]; temporal = [f"{item.timestamp}: {item.summary}" for item in self.timeline.recent(8)]; changes = [f"{c.subject}.{c.property}: {c.old_value} → {c.new_value} ({c.permanence.value}, confiança={c.confidence:.2f})" for c in self.state_history.recent_changes(8)]; decisions = [f"{o.goal} → {o.option}: recompensa={o.reward:.2f}, sucesso={o.success}" for o in self.decision_learning.recent(8)]; expectations = [f"{e.subject}.{e.property} → {e.expected} (confiança={e.confidence:.2f}, fonte={e.source})" for e in self.expectations.active(8)]; surprise = [f"esperado={r.expected} | observado={r.observed} | surpresa={r.surprise:.2f} | {r.status.value}" for r in self.expectations.recent_results(8)]
         return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship, "temporal": temporal, "changes": changes, "decisions": decisions, "expectations": expectations, "surprise": surprise, "workspace": []}
 
     def _compose_context(self, user_text: str, context: dict[str, list[str]], goal: str | None, initiative: str | None = None) -> str:
