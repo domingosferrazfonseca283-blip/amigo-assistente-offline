@@ -65,8 +65,27 @@ class LocalRuntimeAdapter:
             "timestamp": report.timestamp,
         }
 
+    @staticmethod
+    def _component_snapshot(component: Any) -> Any:
+        for method_name in ("snapshot", "to_dict"):
+            method = getattr(component, method_name, None)
+            if callable(method):
+                return method()
+        return None
+
     def _snapshot(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        return self.runtime.snapshot()
+        runtime_snapshot = getattr(self.runtime, "snapshot", None)
+        if callable(runtime_snapshot):
+            return dict(runtime_snapshot())
+        return {
+            "state": self._component_snapshot(self.runtime.state),
+            "world": self._component_snapshot(self.runtime.world),
+            "self_model": self._component_snapshot(self.runtime.self_model),
+            "goals": self._component_snapshot(self.runtime.goals),
+            "relationship": self._component_snapshot(self.runtime.relationship),
+            "expectations": self._component_snapshot(self.runtime.expectations),
+            "decisions": self._component_snapshot(self.runtime.decision_learning),
+        }
 
     def handle_json(self, raw: str) -> str:
         from .local_runtime_protocol import decode_request, encode_request
