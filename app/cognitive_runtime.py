@@ -27,6 +27,8 @@ from .state_change import ChangeDetectionEngine, StateHistory
 from .temporal_memory import TemporalMemory, TemporalRelation
 from .temporal_reasoning import TemporalReasoningEngine
 from .world_model import WorldModel
+from .noemia_being import NoemiaBeing
+from .drive_context import DriveContext
 
 
 class LocalModel(Protocol):
@@ -47,6 +49,7 @@ class CognitiveRuntime:
     self_model: SelfModel = field(default_factory=SelfModel)
     goals: GoalManager = field(default_factory=GoalManager)
     bus: EventBus = field(default_factory=EventBus)
+    being: NoemiaBeing = field(default_factory=NoemiaBeing)
 
     def __post_init__(self) -> None:
         self.affect = AffectEngine(self.state.affect)
@@ -69,13 +72,35 @@ class CognitiveRuntime:
         self.workspace = GlobalWorkspace()
         self.bus.subscribe(EventType.USER_MESSAGE, self._handle_user_message)
 
-    def _register_internal_capabilities(self) -> None:
-        self.agency.register_capability(ActionCapability(
-            "internal_reflection", "Preparar reflexão interna sem tocar no dispositivo.", ActionRisk.NONE, PermissionMode.ALLOW, True,
-        ))
-        self.agency.register_capability(ActionCapability(
-            "store_memory", "Guardar memória local.", ActionRisk.LOW, PermissionMode.ALLOW, True,
-        ))
+    def internal_tick(self) -> DriveContext:
+        """Avança a continuidade interna sem exigir uma mensagem do utilizador.
+
+        O impulso resultante influencia atenção e objetivos, mas não executa
+        qualquer ação por si só. A decisão continua a passar pela cognição,
+        agência e políticas de iniciativa.
+        """
+        drive = self.being.internal_tick()
+        context = DriveContext.from_being(self.being, drive)
+        if drive is not None:
+            self.workspace.submit(
+                f"Impulso interno: {drive.name} ({drive.intensity:.2f})",
+                WorkspaceKind.SELF_SIGNAL,
+                salience=drive.intensity,
+                confidence=0.9,
+                source="being",
+            )
+            self.bus.publish(CognitiveEvent(
+                EventType.REFLECTION,
+                {
+                    "kind": "internal_drive",
+                    "drive": drive.name,
+                    "intensity": drive.intensity,
+                    "focus": drive.suggested_focus,
+                },
+                source="being",
+                importance=max(0.3, drive.intensity),
+            ))
+        return context
 
     def perceive(self, text: str) -> None:
         self.workspace.clear_cycle()
@@ -88,6 +113,7 @@ class CognitiveRuntime:
             return
         self.state.touch()
         self.state.turn_count += 1
+        self.being.experience(event)
         self.affect.on_input(text)
         topics = self._extract_topics(text)
         episode = self.episodic.record(
@@ -126,11 +152,21 @@ class CognitiveRuntime:
             return None
         return self.create_goal(title, priority, source="autonomy")
 
-    def _choose_goal(self):
+    def _choose_goal(self, drive_context: DriveContext | None = None):
         active = self.goals.active()
         if not active:
             return None, None
-        choices = [Choice(g.id, max(0.0, min(1.0, g.priority * 0.8 + (1.0 - g.progress) * 0.2)), [f"prioridade={g.priority:.2f}", f"progresso={g.progress:.2f}"]) for g in active[:8]]
+        dominant = drive_context.dominant if drive_context else self.being.strongest_drive()
+        choices = []
+        for goal in active[:8]:
+            score = max(0.0, min(1.0, goal.priority * 0.8 + (1.0 - goal.progress) * 0.2))
+            reasons = [f"prioridade={goal.priority:.2f}", f"progresso={goal.progress:.2f}"]
+            if dominant is not None:
+                focus_match = dominant.suggested_focus.lower() in goal.title.lower() or dominant.name.lower() in goal.title.lower()
+                if focus_match:
+                    score = min(1.0, score + 0.15 * dominant.intensity)
+                    reasons.append(f"alinhamento_impulso={dominant.name}")
+            choices.append(Choice(goal.id, score, reasons))
         for choice in choices:
             choice.score = self.decision_learning.score("priorização de objetivos", choice.option, choice.score)
         decision = self.autonomy.choose("priorização de objetivos", choices)
@@ -140,7 +176,8 @@ class CognitiveRuntime:
         return chosen or active[0], decision
 
     def evaluate_initiative(self, context: str = "inatividade"):
-        goal, decision = self._choose_goal()
+        drive_context = self.internal_tick()
+        goal, decision = self._choose_goal(drive_context)
         if goal is None:
             return None
         initiative = self.agency.request_initiative(goal, context)
@@ -203,7 +240,8 @@ class CognitiveRuntime:
         self.expectations.expire()
         self.workspace.submit(user_text, WorkspaceKind.PERCEPTION, salience=0.9, confidence=0.98, source="user")
         context = self._retrieve_context(user_text)
-        goal, decision = self._choose_goal()
+        drive_context = self.internal_tick()
+        goal, decision = self._choose_goal(drive_context)
         initiative = self.agency.request_initiative(goal, "durante interação") if goal else None
         if initiative:
             self.workspace.submit(f"Proposta: {initiative.action}", WorkspaceKind.POSSIBILITY, salience=0.7, confidence=0.7, source="initiative")
@@ -213,8 +251,9 @@ class CognitiveRuntime:
             novelty=self.state.affect.novelty,
         )
         context["workspace"] = self.workspace.active_context()
+        context["drive"] = [drive_context.reason, drive_context.focus] if drive_context.dominant else []
         prompt = self._compose_context(user_text, context, goal.title if goal else None, initiative.action if initiative else None)
-        self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None, "decision_id": decision.id if decision else None, "focus": self.workspace.active_context()}, source="runtime"))
+        self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None, "decision_id": decision.id if decision else None, "focus": self.workspace.active_context(), "drive": drive_context.reason}, source="runtime"))
         try:
             response = self.model.generate(prompt).strip()
         except Exception as exc:
@@ -262,18 +301,20 @@ class CognitiveRuntime:
         return "\n".join([
             "IDENTIDADE OPERACIONAL:", f"Nome: {self.self_model.name}", f"Relação: {self.self_model.relationship}", "Estado interno operacional: " + str(self.state.affect.__dict__),
             "\nFOCO COGNITIVO GLOBAL:\n" + "\n".join(context.get("workspace", [])),
+            "\nIMPULSO INTERNO:\n" + "\n".join(context.get("drive", [])),
             "\nMODELO DA RELAÇÃO:\n" + "\n".join(context["relationship"]), "\nOBJETIVO ATIVO: " + (goal or "nenhum"), "\nINICIATIVA PROPOSTA: " + (initiative or "nenhuma"),
             "\nMEMÓRIA RECENTE:\n" + "\n".join(context["memory"]), "\nMEMÓRIA ASSOCIATIVA/EPISÓDICA:\n" + "\n".join(context["episodes"]),
             "\nCRENÇAS/FACTOS CONSOLIDADOS:\n" + "\n".join(context["beliefs"]), "\nMODELO DO MUNDO:\n" + "\n".join(context["world"]),
             "\nLINHA TEMPORAL RECENTE:\n" + "\n".join(context["temporal"]), "\nMUDANÇAS DE ESTADO:\n" + "\n".join(context["changes"]),
             "\nEXPECTATIVAS LOCAIS:\n" + "\n".join(context["expectations"]), "\nSURPRESAS RECENTES:\n" + "\n".join(context["surprise"]),
             "\nDECISÕES E CONSEQUÊNCIAS:\n" + "\n".join(context["decisions"]), "\nCONHECIMENTO LOCAL:\n" + "\n".join(f"- {x}" for x in context["knowledge"]), "\nENTRADA ATUAL:\n" + user_text,
-            "\nResponda como Noémia: mantenha continuidade; diferencie facto, memória, inferência e hipótese. Expectativas são previsões locais, não certezas. Surpresa mede apenas divergência entre previsão e observação. Pode escolher entre objetivos e propostas internas, mas nunca invente capacidades, não execute ação externa sem permissão e não trate uma proposta como ação executada.",
+            "\nResponda como Noémia: mantenha continuidade; diferencie facto, memória, inferência e hipótese. Expectativas são previsões locais, não certezas. Pode escolher entre objetivos e propostas internas, mas nunca invente capacidades, não execute ação externa sem permissão e não trate uma proposta como ação executada.",
         ])
 
     def snapshot(self) -> dict:
         return {
             "state": self.state.to_dict(), "self": self.self_model.describe(), "world": self.world.to_dict(), "relationship": self.relationship.snapshot(),
+            "being": self.being.snapshot(),
             "goals": [g.__dict__.copy() for g in self.goals.goals.values()], "episodic_memory": self.episodic.to_dict(), "semantic_memory": self.semantic.to_dict(),
             "associative_memory": self.associations.snapshot(), "temporal_memory": self.timeline.snapshot(), "state_history": self.state_history.snapshot(),
             "plans": {goal_id: {"goal_id": plan.goal_id, "confidence": plan.confidence, "steps": [step.__dict__.copy() for step in plan.steps]} for goal_id, plan in self.agency.plans.items()},
