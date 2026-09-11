@@ -6,6 +6,7 @@ from typing import Protocol
 from .affect import AffectEngine
 from .agency import ActionCapability, ActionRisk, AgencyEngine, PermissionMode
 from .autonomy import AutonomyEngine, Choice
+from .autonomy_scheduler import AttentionReason, AutonomyScheduler
 from .cognitive_events import CognitiveEvent, EventType
 from .cognitive_state import NoemiaState
 from .consolidation import OfflineConsolidator
@@ -67,6 +68,7 @@ class CognitiveRuntime:
         self._register_internal_capabilities()
         self.initiative = InitiativeEngine(self.goals, self.agency, InitiativePolicy())
         self.autonomy = AutonomyEngine()
+        self.autonomy_scheduler = AutonomyScheduler(self.goals, self.autonomy)
         self.decision_learning = DecisionLearner()
         self.consolidator = OfflineConsolidator(self.episodic, self.semantic, self.bus)
         self.workspace = GlobalWorkspace()
@@ -81,12 +83,56 @@ class CognitiveRuntime:
         self.agency.register_capability(ActionCapability("internal_reflection", ActionRisk.NONE, PermissionMode.ALLOW, background_allowed=True))
         self.agency.register_capability(ActionCapability("store_memory", ActionRisk.LOW, PermissionMode.ALLOW, background_allowed=True))
 
+    def _process_internal_attention(self, context: DriveContext) -> None:
+        """Converte impulso em atenção autónoma sem executar ações externas."""
+        self.autonomy_scheduler.budget.reset()
+        tasks = self.autonomy_scheduler.from_current_state(
+            curiosity=self.state.affect.curiosity,
+            uncertainty=self.state.affect.uncertainty,
+            novelty=self.state.affect.novelty,
+        )
+        selected = self.autonomy_scheduler.propose(tasks)
+        for task in selected:
+            self.workspace.submit(
+                f"Atenção interna: {task.title}",
+                WorkspaceKind.POSSIBILITY,
+                salience=task.priority,
+                confidence=0.85,
+                source="autonomy_scheduler",
+            )
+            self.bus.publish(CognitiveEvent(
+                EventType.REFLECTION,
+                {
+                    "kind": "internal_attention",
+                    "task_id": task.id,
+                    "task": task.title,
+                    "reason": task.reason.value,
+                    "priority": task.priority,
+                    "goal_id": task.goal_id,
+                    "drive": context.dominant.name if context.dominant else None,
+                },
+                source="autonomy_scheduler",
+                importance=max(0.4, task.priority),
+            ))
+
+            # Um impulso forte pode originar um objetivo interno, mas só através
+            # do GoalManager. Isto não é uma ação externa nem uma permissão de dispositivo.
+            if task.reason != AttentionReason.GOAL and task.priority >= 0.70:
+                active_titles = {goal.title.lower() for goal in self.goals.active()}
+                if task.title.lower() not in active_titles:
+                    goal = self.maybe_create_internal_goal(task.title, priority=min(0.85, task.priority))
+                    if goal is not None:
+                        task.goal_id = goal.id
+
+            self.autonomy_scheduler.complete(task.id)
+
     def internal_tick(self) -> DriveContext:
         drive = self.being.internal_tick()
         context = DriveContext.from_being(self.being)
         if drive is not None:
             self.workspace.submit(f"Impulso interno: {drive.name} ({drive.intensity:.2f})", WorkspaceKind.SELF_SIGNAL, salience=drive.intensity, confidence=0.9, source="being")
             self.bus.publish(CognitiveEvent(EventType.REFLECTION, {"kind": "internal_drive", "drive": drive.name, "intensity": drive.intensity, "focus": drive.suggested_focus}, source="being", importance=max(0.3, drive.intensity)))
+        self._process_internal_attention(context)
         return context
 
     def perceive(self, text: str) -> None:
@@ -189,4 +235,4 @@ class CognitiveRuntime:
         return "\n".join(["IDENTIDADE OPERACIONAL:", f"Nome: {self.self_model.name}", f"Relação: {self.self_model.relationship}", "Estado interno operacional: " + str(self.state.affect.__dict__), "\nFOCO COGNITIVO GLOBAL:\n" + "\n".join(context.get("workspace", [])), "\nIMPULSO INTERNO:\n" + "\n".join(context.get("drive", [])), "\nMODELO DA RELAÇÃO:\n" + "\n".join(context["relationship"]), "\nOBJETIVO ATIVO: " + (goal or "nenhum"), "\nINICIATIVA PROPOSTA: " + (initiative or "nenhuma"), "\nMEMÓRIA RECENTE:\n" + "\n".join(context["memory"]), "\nMEMÓRIA ASSOCIATIVA/EPISÓDICA:\n" + "\n".join(context["episodes"]), "\nCRENÇAS/FACTOS CONSOLIDADOS:\n" + "\n".join(context["beliefs"]), "\nMODELO DO MUNDO:\n" + "\n".join(context["world"]), "\nLINHA TEMPORAL RECENTE:\n" + "\n".join(context["temporal"]), "\nMUDANÇAS DE ESTADO:\n" + "\n".join(context["changes"]), "\nEXPECTATIVAS LOCAIS:\n" + "\n".join(context["expectations"]), "\nSURPRESAS RECENTES:\n" + "\n".join(context["surprise"]), "\nDECISÕES E CONSEQUÊNCIAS:\n" + "\n".join(context["decisions"]), "\nCONHECIMENTO LOCAL:\n" + "\n".join(f"- {x}" for x in context["knowledge"]), "\nENTRADA ATUAL:\n" + user_text, "\nResponda como Noémia: mantenha continuidade; diferencie facto, memória, inferência e hipótese. Expectativas são previsões locais, não certezas. Pode escolher entre objetivos e propostas internas, mas nunca invente capacidades, não execute ação externa sem permissão e não trate uma proposta como ação executada."])
 
     def snapshot(self) -> dict:
-        return {"state": self.state.to_dict(), "self": self.self_model.describe(), "world": self.world.to_dict(), "relationship": self.relationship.snapshot(), "being": self.being.snapshot(), "goals": [g.__dict__.copy() for g in self.goals.goals.values()], "episodic_memory": self.episodic.to_dict(), "semantic_memory": self.semantic.to_dict(), "associative_memory": self.associations.snapshot(), "temporal_memory": self.timeline.snapshot(), "state_history": self.state_history.snapshot(), "plans": {goal_id: {"goal_id": plan.goal_id, "confidence": plan.confidence, "steps": [step.__dict__.copy() for step in plan.steps]} for goal_id, plan in self.agency.plans.items()}, "initiative": {"enabled": self.initiative.policy.enabled, "pending": [item.__dict__.copy() for item in self.initiative.pending]}, "capabilities": {name: capability.__dict__.copy() for name, capability in self.agency.capabilities.items()}, "autonomy": self.autonomy.snapshot(), "decision_learning": self.decision_learning.snapshot(), "expectations": self.expectations.snapshot(), "global_workspace": self.workspace.snapshot()}
+        return {"state": self.state.to_dict(), "self": self.self_model.describe(), "world": self.world.to_dict(), "relationship": self.relationship.snapshot(), "being": self.being.snapshot(), "goals": [g.__dict__.copy() for g in self.goals.goals.values()], "episodic_memory": self.episodic.to_dict(), "semantic_memory": self.semantic.to_dict(), "associative_memory": self.associations.snapshot(), "temporal_memory": self.timeline.snapshot(), "state_history": self.state_history.snapshot(), "plans": {goal_id: {"goal_id": plan.goal_id, "confidence": plan.confidence, "steps": [step.__dict__.copy() for step in plan.steps]} for goal_id, plan in self.agency.plans.items()}, "initiative": {"enabled": self.initiative.policy.enabled, "pending": [item.__dict__.copy() for item in self.initiative.pending]}, "capabilities": {name: capability.__dict__.copy() for name, capability in self.agency.capabilities.items()}, "autonomy": self.autonomy.snapshot(), "autonomy_scheduler": self.autonomy_scheduler.snapshot(), "decision_learning": self.decision_learning.snapshot(), "expectations": self.expectations.snapshot(), "global_workspace": self.workspace.snapshot()}
