@@ -47,32 +47,45 @@ std::string RuntimeCore::execute(const std::string& request_json) {
         if (request_json.find("\"restore\"") != std::string::npos) {
             turn_count_ = extract_number(request_json, "turn_count", turn_count_);
             internal_cycle_count_ = extract_number(request_json, "internal_cycle_count", internal_cycle_count_);
+            experience_count_ = extract_number(request_json, "experience_count", experience_count_);
         }
         std::ostringstream out;
-        out << "{\"ok\":true,\"payload\":{\"turn_count\":" << turn_count_
+        out << "{\"ok\":true,\"payload\":{\"identity\":\"Noémia\",\"turn_count\":" << turn_count_
             << ",\"internal_cycle_count\":" << internal_cycle_count_
-            << "},\"error\":null,\"request_id\":\"" << request_id << "\"}";
+            << ",\"experience_count\":" << experience_count_
+            << ",\"last_activity\":\"" << last_activity_
+            << "\",\"affect_state\":\"" << affect_state_
+            << "\"},\"error\":null,\"request_id\":\"" << request_id << "\"}";
         return out.str();
     }
 
     if (is_think) {
         ++turn_count_;
+        ++experience_count_;
         last_input_ = extract_string(request_json, "text");
+        last_activity_ = "conversation";
+        affect_state_ = "engaged";
         std::ostringstream out;
-        out << "{\"ok\":true,\"payload\":{\"text\":\"Estou contigo. Recebi a tua mensagem.\"},\"error\":null,\"request_id\":\"" << request_id << "\"}";
+        out << "{\"ok\":true,\"payload\":{\"text\":\"Estou contigo. Recebi a tua mensagem.\",\"identity\":\"Noémia\",\"affect_state\":\""
+            << affect_state_ << "\"},\"error\":null,\"request_id\":\"" << request_id << "\"}";
         return out.str();
     }
 
     if (is_perceive) {
+        ++experience_count_;
         last_input_ = extract_string(request_json, "text");
-        return "{\"ok\":true,\"payload\":{\"accepted\":true},\"error\":null,\"request_id\":\"" + request_id + "\"}";
+        last_activity_ = "perceiving";
+        affect_state_ = "attentive";
+        return "{\"ok\":true,\"payload\":{\"accepted\":true,\"experience_count\":" + std::to_string(experience_count_) + "},\"error\":null,\"request_id\":\"" + request_id + "\"}";
     }
 
     if (is_internal) {
         ++internal_cycle_count_;
+        last_activity_ = "reflecting";
+        affect_state_ = "calm";
         std::ostringstream out;
         out << "{\"ok\":true,\"payload\":{\"cycle_id\":\"native-" << internal_cycle_count_
-            << "\",\"completed_phases\":[\"OBSERVE\",\"RECALL\",\"REFLECT\"],\"focus\":\"atividade interna\"},\"error\":null,\"request_id\":\"" << request_id << "\"}";
+            << "\",\"completed_phases\":[\"OBSERVE\",\"RECALL\",\"REFLECT\",\"CONSOLIDATE\"],\"focus\":\"atividade interna\"},\"error\":null,\"request_id\":\"" << request_id << "\"}";
         return out.str();
     }
 
