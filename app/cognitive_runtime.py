@@ -72,6 +72,11 @@ class CognitiveRuntime:
         self.workspace = GlobalWorkspace()
         self.bus.subscribe(EventType.USER_MESSAGE, self._handle_user_message)
 
+    def restore(self, snapshot: dict) -> None:
+        """Restaura a continuidade persistente da entidade no próprio runtime."""
+        from .runtime_persistence import restore_runtime_core
+        restore_runtime_core(self, snapshot)
+
     def _register_internal_capabilities(self) -> None:
         self.agency.register_capability(ActionCapability("internal_reflection", ActionRisk.NONE, PermissionMode.ALLOW, background_allowed=True))
         self.agency.register_capability(ActionCapability("store_memory", ActionRisk.LOW, PermissionMode.ALLOW, background_allowed=True))
