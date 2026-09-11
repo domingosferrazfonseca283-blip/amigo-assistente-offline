@@ -5,9 +5,11 @@ from typing import Protocol
 
 from .affect import AffectEngine
 from .agency import ActionCapability, ActionRisk, AgencyEngine, PermissionMode
+from .autonomy import AutonomyEngine, Choice
 from .cognitive_events import CognitiveEvent, EventType
 from .cognitive_state import NoemiaState
 from .consolidation import OfflineConsolidator
+from .decision_learning import DecisionLearner
 from .episodic_memory import EpisodicMemory
 from .event_bus import EventBus
 from .goals import GoalManager
@@ -58,6 +60,8 @@ class CognitiveRuntime:
         self.agency = AgencyEngine()
         self._register_internal_capabilities()
         self.initiative = InitiativeEngine(self.goals, self.agency, InitiativePolicy())
+        self.autonomy = AutonomyEngine()
+        self.decision_learning = DecisionLearner()
         self.consolidator = OfflineConsolidator(self.episodic, self.semantic, self.bus)
         self.bus.subscribe(EventType.USER_MESSAGE, self._handle_user_message)
 
@@ -107,10 +111,33 @@ class CognitiveRuntime:
         self.agency.plan_for(goal)
         return goal
 
+    def maybe_create_internal_goal(self, title: str, priority: float = 0.7):
+        """Permite iniciativa interna explícita sem abrir automaticamente ações externas."""
+        if not self.autonomy.should_create_goal(priority):
+            return None
+        goal = self.create_goal(title, priority, source="autonomy")
+        return goal
+
+    def _choose_goal(self):
+        active = self.goals.active()
+        if not active:
+            return None, None
+        choices = [Choice(g.id, max(0.0, min(1.0, g.priority * 0.8 + (1.0 - g.progress) * 0.2)), [f"prioridade={g.priority:.2f}", f"progresso={g.progress:.2f}"]) for g in active[:8]]
+        for choice in choices:
+            choice.score = self.decision_learning.score(choice.option, "priorizar", choice.score)
+        decision = self.autonomy.choose("priorização de objetivos", choices)
+        chosen = next((g for g in active if decision.chosen and g.id == decision.chosen.option), None)
+        return chosen or active[0], decision
+
     def evaluate_initiative(self, context: str = "inatividade"):
-        initiative = self.initiative.evaluate(context)
+        goal, decision = self._choose_goal()
+        if goal is None:
+            return None
+        initiative = self.agency.request_initiative(goal, context)
         if initiative is not None:
-            self.bus.publish(CognitiveEvent(EventType.ACTION_REQUESTED, {"action": initiative.action, "goal_id": initiative.goal_id, "requires_confirmation": initiative.requires_confirmation, "reason": initiative.reason}, source="initiative", importance=0.75))
+            self.initiative.pending.append(initiative)
+            self.initiative.pending = self.initiative.pending[-self.initiative.policy.max_pending:]
+            self.bus.publish(CognitiveEvent(EventType.ACTION_REQUESTED, {"action": initiative.action, "goal_id": initiative.goal_id, "requires_confirmation": initiative.requires_confirmation, "reason": initiative.reason, "decision_id": decision.id if decision else None}, source="initiative", importance=0.75))
         return initiative
 
     def approve_initiative(self, index: int = 0):
@@ -124,10 +151,10 @@ class CognitiveRuntime:
         for change in self.state_history.recent_changes(limit=20):
             self.timeline.relate(change.evidence[0] if change.evidence else change.id, change.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
         self.state.reflections.append(
-            f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}; tempo: {temporal_report.events_linked} ligações, {temporal_report.repetitions_found} repetições, {temporal_report.possible_changes} mudanças possíveis; histórico: {len(self.state_history.changes)} mudanças"
+            f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}; tempo: {temporal_report.events_linked} ligações, {temporal_report.repetitions_found} repetições, {temporal_report.possible_changes} mudanças possíveis; histórico: {len(self.state_history.changes)} mudanças; decisões aprendidas: {len(self.decision_learning.outcomes)}"
         )
         self.state.reflections = self.state.reflections[-100:]
-        self.bus.publish(CognitiveEvent(EventType.CONSOLIDATION, {"memory": report.__dict__, "graph": graph_report.__dict__, "temporal": temporal_report.__dict__, "changes": len(self.state_history.changes)}, source="consolidation", importance=0.6))
+        self.bus.publish(CognitiveEvent(EventType.CONSOLIDATION, {"memory": report.__dict__, "graph": graph_report.__dict__, "temporal": temporal_report.__dict__, "changes": len(self.state_history.changes), "decisions": len(self.decision_learning.outcomes)}, source="consolidation", importance=0.6))
         return report
 
     def learn_user_fact(self, subject: str, predicate: str, value: object):
@@ -145,15 +172,17 @@ class CognitiveRuntime:
 
     def think(self, user_text: str) -> str:
         context = self._retrieve_context(user_text)
-        goal = self.goals.top()
-        initiative = self.evaluate_initiative("durante interação") if goal else None
+        goal, decision = self._choose_goal()
+        initiative = self.agency.request_initiative(goal, "durante interação") if goal else None
         prompt = self._compose_context(user_text, context, goal.title if goal else None, initiative.action if initiative else None)
-        self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None}, source="runtime"))
+        self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None, "decision_id": decision.id if decision else None}, source="runtime"))
         try:
             response = self.model.generate(prompt).strip()
         except Exception as exc:
             self.affect.on_failure()
             self.episodic.record("Falha durante geração local", {"success": False, "error": type(exc).__name__, "input": user_text}, importance=0.7, source="runtime")
+            if decision and decision.chosen:
+                self.decision_learning.record_outcome(decision.id, decision.goal, decision.chosen.option, decision.chosen.score, -0.5, False)
             self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": False, "error": type(exc).__name__}, source="runtime"))
             raise
         if not response:
@@ -165,6 +194,8 @@ class CognitiveRuntime:
         self.timeline.record(response_episode.summary, source="runtime", importance=0.65, tags=self._extract_topics(user_text), event_id=response_episode.id, timestamp=response_episode.timestamp)
         self.state.working_memory.append({"type": "assistant", "text": response})
         self.state.working_memory = self.state.working_memory[-24:]
+        if decision and decision.chosen:
+            self.decision_learning.record_outcome(decision.id, decision.goal, decision.chosen.option, decision.chosen.score, 0.25, True, [response_episode.id])
         self.bus.publish(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7))
         self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": True, "input": user_text, "output": response}, source="runtime"))
         return response
@@ -182,7 +213,8 @@ class CognitiveRuntime:
         relationship = [f"familiaridade={self.relationship.relationship.familiarity:.2f}", f"continuidade={self.relationship.relationship.continuity_score:.2f}", "tópicos partilhados=" + ", ".join(sorted(self.relationship.relationship.shared_topics, key=self.relationship.relationship.shared_topics.get, reverse=True)[:8])]
         temporal = [f"{item.timestamp}: {item.summary}" for item in self.timeline.recent(8)]
         changes = [f"{c.subject}.{c.property}: {c.old_value} → {c.new_value} ({c.permanence.value}, confiança={c.confidence:.2f})" for c in self.state_history.recent_changes(8)]
-        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship, "temporal": temporal, "changes": changes}
+        decisions = [f"{o.goal} → {o.option}: recompensa={o.reward:.2f}, sucesso={o.success}" for o in self.decision_learning.recent(8)]
+        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship, "temporal": temporal, "changes": changes, "decisions": decisions}
 
     def _compose_context(self, user_text: str, context: dict[str, list[str]], goal: str | None, initiative: str | None = None) -> str:
         return "\n".join([
@@ -191,8 +223,8 @@ class CognitiveRuntime:
             "\nMEMÓRIA RECENTE:\n" + "\n".join(context["memory"]), "\nMEMÓRIA ASSOCIATIVA/EPISÓDICA:\n" + "\n".join(context["episodes"]),
             "\nCRENÇAS/FACTOS CONSOLIDADOS:\n" + "\n".join(context["beliefs"]), "\nMODELO DO MUNDO:\n" + "\n".join(context["world"]),
             "\nLINHA TEMPORAL RECENTE:\n" + "\n".join(context["temporal"]), "\nMUDANÇAS DE ESTADO:\n" + "\n".join(context["changes"]),
-            "\nCONHECIMENTO LOCAL:\n" + "\n".join(f"- {x}" for x in context["knowledge"]), "\nENTRADA ATUAL:\n" + user_text,
-            "\nResponda como Noémia: mantenha continuidade; diferencie facto, memória, inferência e hipótese. Use mudanças de estado como histórico, não como certeza de causa ou permanência. Nunca invente memória nem trate uma proposta de ação como ação executada.",
+            "\nDECISÕES E CONSEQUÊNCIAS:\n" + "\n".join(context["decisions"]), "\nCONHECIMENTO LOCAL:\n" + "\n".join(f"- {x}" for x in context["knowledge"]), "\nENTRADA ATUAL:\n" + user_text,
+            "\nResponda como Noémia: mantenha continuidade; diferencie facto, memória, inferência e hipótese. Pode escolher entre objetivos e propostas internas, mas nunca invente capacidades, não execute ação externa sem permissão e não trate uma proposta como ação executada.",
         ])
 
     def snapshot(self) -> dict:
@@ -203,4 +235,5 @@ class CognitiveRuntime:
             "plans": {goal_id: {"goal_id": plan.goal_id, "confidence": plan.confidence, "steps": [step.__dict__.copy() for step in plan.steps]} for goal_id, plan in self.agency.plans.items()},
             "initiative": {"enabled": self.initiative.policy.enabled, "pending": [item.__dict__.copy() for item in self.initiative.pending]},
             "capabilities": {name: capability.__dict__.copy() for name, capability in self.agency.capabilities.items()},
+            "autonomy": self.autonomy.snapshot(), "decision_learning": self.decision_learning.snapshot(),
         }
