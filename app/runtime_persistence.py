@@ -3,26 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 
-def _restore_dataclass_list(container: list, cls: Any, values: list[dict[str, Any]], enum_fields: dict[str, Any] | None = None) -> None:
+def _restore_dataclass_list(container: list, cls: Any, values: list[dict[str, Any]]) -> None:
     from dataclasses import fields
-
     allowed = {item.name for item in fields(cls)}
     container.clear()
     for raw in values:
-        data = {key: value for key, value in dict(raw).items() if key in allowed}
-        for name, enum_cls in (enum_fields or {}).items():
-            if name in data:
-                data[name] = enum_cls(data[name])
-        container.append(cls(**data))
+        container.append(cls(**{key: value for key, value in dict(raw).items() if key in allowed}))
 
 
 def restore_runtime_core(runtime: Any, snapshot: dict[str, Any]) -> None:
-    """Reconstrói o estado persistente do CognitiveRuntime, incluindo memória cognitiva.
-
-    O objetivo é que reiniciar o processo não apague a continuidade interna:
-    memórias, relações, linha temporal, aprendizagem, expectativas, workspace,
-    planos e iniciativas pendentes voltam para o mesmo núcleo cognitivo.
-    """
+    """Reconstrói o estado persistente do CognitiveRuntime, incluindo memória cognitiva."""
     from .agency import ActionCapability, ActionRisk, PermissionMode, Plan, PlanStep, Initiative
     from .autonomy import AutonomyDecision, AutonomyLevel, AutonomyPolicy, Choice
     from .cognitive_state import NoemiaState
@@ -34,8 +24,7 @@ def restore_runtime_core(runtime: Any, snapshot: dict[str, Any]) -> None:
     from .noemia_being import NoemiaBeing
     from .semantic_memory import Belief, BeliefKind
     from .state_change import StateChange, StateSnapshot, Permanence
-    from .temporal_memory import TemporalEvent if False else TemporalRelation
-    from .temporal_memory import TimelineEvent, TemporalLink
+    from .temporal_memory import TimelineEvent, TemporalLink, TemporalRelation
     from .world_model import WorldModel
 
     runtime.state = NoemiaState.from_dict(dict(snapshot.get("state", {})))
@@ -44,22 +33,19 @@ def restore_runtime_core(runtime: Any, snapshot: dict[str, Any]) -> None:
     runtime.relationship.restore(snapshot.get("relationship"))
     runtime.affect.state = runtime.state.affect
 
-    goals = snapshot.get("goals", [])
     runtime.goals.goals.clear()
     from .goals import Goal, GoalStatus
-    for raw in goals:
+    for raw in snapshot.get("goals", []):
         data = dict(raw)
         data["status"] = GoalStatus(data.get("status", GoalStatus.ACTIVE))
         goal = Goal(**data)
         runtime.goals.goals[goal.id] = goal
     runtime.state.active_goals = [goal.id for goal in runtime.goals.active()]
 
-    episodic = snapshot.get("episodic_memory", [])
-    _restore_dataclass_list(runtime.episodic.episodes, Episode, episodic)
+    _restore_dataclass_list(runtime.episodic.episodes, Episode, snapshot.get("episodic_memory", []))
 
-    semantic = snapshot.get("semantic_memory", [])
     runtime.semantic.beliefs.clear()
-    for raw in semantic:
+    for raw in snapshot.get("semantic_memory", []):
         data = dict(raw)
         data["kind"] = BeliefKind(data.get("kind", BeliefKind.INFERRED))
         belief = Belief(**data)
@@ -99,14 +85,16 @@ def restore_runtime_core(runtime: Any, snapshot: dict[str, Any]) -> None:
         data["permanence"] = Permanence(data.get("permanence", Permanence.UNKNOWN))
         runtime.state_history.changes.append(StateChange(**data))
 
-    plans = snapshot.get("plans", {})
     runtime.agency.plans.clear()
-    for goal_id, raw in plans.items():
-        steps = [PlanStep(**{**dict(step), "risk": ActionRisk(dict(step).get("risk", ActionRisk.LOW))}) for step in raw.get("steps", [])]
+    for goal_id, raw in snapshot.get("plans", {}).items():
+        steps = []
+        for step in raw.get("steps", []):
+            data = dict(step)
+            data["risk"] = ActionRisk(data.get("risk", ActionRisk.LOW))
+            steps.append(PlanStep(**data))
         runtime.agency.plans[goal_id] = Plan(goal_id, steps, float(raw.get("confidence", 0.5)))
 
-    capabilities = snapshot.get("capabilities", {})
-    for name, raw in capabilities.items():
+    for name, raw in snapshot.get("capabilities", {}).items():
         data = dict(raw)
         data["risk"] = ActionRisk(data.get("risk", ActionRisk.LOW))
         data["permission"] = PermissionMode(data.get("permission", PermissionMode.CONFIRM))
@@ -128,8 +116,7 @@ def restore_runtime_core(runtime: Any, snapshot: dict[str, Any]) -> None:
     runtime.autonomy.decisions.clear()
     for raw in autonomy.get("decisions", []):
         data = dict(raw)
-        chosen = data.get("chosen")
-        data["chosen"] = Choice(**chosen) if chosen else None
+        data["chosen"] = Choice(**data["chosen"]) if data.get("chosen") else None
         data["alternatives"] = [Choice(**item) for item in data.get("alternatives", [])]
         data["autonomy_level"] = AutonomyLevel(data.get("autonomy_level", AutonomyLevel.CHOOSE))
         runtime.autonomy.decisions.append(AutonomyDecision(**data))
