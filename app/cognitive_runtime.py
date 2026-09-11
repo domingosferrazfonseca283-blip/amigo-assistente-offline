@@ -12,6 +12,7 @@ from .consolidation import OfflineConsolidator
 from .decision_learning import DecisionLearner
 from .episodic_memory import EpisodicMemory
 from .event_bus import EventBus
+from .global_workspace import GlobalWorkspace, WorkspaceKind
 from .goals import GoalManager
 from .initiative import InitiativeEngine, InitiativePolicy
 from .memory import LocalMemory
@@ -63,6 +64,7 @@ class CognitiveRuntime:
         self.autonomy = AutonomyEngine()
         self.decision_learning = DecisionLearner()
         self.consolidator = OfflineConsolidator(self.episodic, self.semantic, self.bus)
+        self.workspace = GlobalWorkspace()
         self.bus.subscribe(EventType.USER_MESSAGE, self._handle_user_message)
 
     def _register_internal_capabilities(self) -> None:
@@ -74,6 +76,8 @@ class CognitiveRuntime:
         ))
 
     def perceive(self, text: str) -> None:
+        self.workspace.clear_cycle()
+        self.workspace.submit(text, WorkspaceKind.PERCEPTION, salience=0.9, confidence=0.98, source="user")
         self.bus.publish(CognitiveEvent(EventType.USER_MESSAGE, {"text": text}, source="user", importance=0.8))
 
     def _handle_user_message(self, event: CognitiveEvent) -> None:
@@ -95,6 +99,9 @@ class CognitiveRuntime:
         self.timeline.record(episode.summary, source="perception", importance=event.importance, tags=topics, event_id=episode.id, timestamp=episode.timestamp)
         self.relationship.observe(text, topics=topics, important=event.importance >= 0.9, episode_id=episode.id)
         self.world.observe_user_statement(text, confidence=0.95)
+        self.workspace.submit(episode.summary, WorkspaceKind.MEMORY, salience=episode.salience, confidence=0.85, source="episodic_memory")
+        for goal in self.goals.active()[:6]:
+            self.workspace.submit(f"{goal.title} (progresso={goal.progress:.2f})", WorkspaceKind.GOAL, salience=goal.priority, confidence=0.95, source="goal_manager")
         self.state.working_memory.append({"type": "user", "text": text, "event_id": event.id})
         self.state.working_memory = self.state.working_memory[-24:]
 
@@ -107,6 +114,7 @@ class CognitiveRuntime:
     def create_goal(self, title: str, priority: float = 0.5, source: str = "user"):
         goal = self.goals.add(title, priority, source)
         self.state.active_goals = [g.id for g in self.goals.active()]
+        self.workspace.submit(f"{goal.title} (progresso={goal.progress:.2f})", WorkspaceKind.GOAL, salience=goal.priority, confidence=0.95, source="goal_manager")
         self.bus.publish(CognitiveEvent(EventType.GOAL_CREATED, {"id": goal.id, "title": goal.title, "priority": goal.priority}, source="goal_manager", importance=0.8))
         self.agency.plan_for(goal)
         return goal
@@ -124,9 +132,11 @@ class CognitiveRuntime:
             return None, None
         choices = [Choice(g.id, max(0.0, min(1.0, g.priority * 0.8 + (1.0 - g.progress) * 0.2)), [f"prioridade={g.priority:.2f}", f"progresso={g.progress:.2f}"]) for g in active[:8]]
         for choice in choices:
-            choice.score = self.decision_learning.score(choice.option, "priorizar", choice.score)
+            choice.score = self.decision_learning.score("priorização de objetivos", choice.option, choice.score)
         decision = self.autonomy.choose("priorização de objetivos", choices)
         chosen = next((g for g in active if decision.chosen and g.id == decision.chosen.option), None)
+        if decision.chosen:
+            self.workspace.submit(f"Escolha: {decision.chosen.option}", WorkspaceKind.GOAL, salience=decision.chosen.score, confidence=decision.chosen.score, source="autonomy")
         return chosen or active[0], decision
 
     def evaluate_initiative(self, context: str = "inatividade"):
@@ -137,6 +147,7 @@ class CognitiveRuntime:
         if initiative is not None:
             self.initiative.pending.append(initiative)
             self.initiative.pending = self.initiative.pending[-self.initiative.policy.max_pending:]
+            self.workspace.submit(f"Iniciativa: {initiative.action}", WorkspaceKind.POSSIBILITY, salience=0.75, confidence=0.7, source="initiative")
             self.bus.publish(CognitiveEvent(EventType.ACTION_REQUESTED, {"action": initiative.action, "goal_id": initiative.goal_id, "requires_confirmation": initiative.requires_confirmation, "reason": initiative.reason, "decision_id": decision.id if decision else None}, source="initiative", importance=0.75))
         return initiative
 
@@ -150,6 +161,7 @@ class CognitiveRuntime:
         temporal_report = self.temporal_reasoning.analyze(self.episodic, self.relationship, self.timeline)
         for change in self.state_history.recent_changes(limit=20):
             self.timeline.relate(change.evidence[0] if change.evidence else change.id, change.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
+        self.workspace.submit("Consolidação da memória e aprendizagem", WorkspaceKind.SELF_SIGNAL, salience=0.65, confidence=0.9, source="consolidation")
         self.state.reflections.append(
             f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}; tempo: {temporal_report.events_linked} ligações, {temporal_report.repetitions_found} repetições, {temporal_report.possible_changes} mudanças possíveis; histórico: {len(self.state_history.changes)} mudanças; decisões aprendidas: {len(self.decision_learning.outcomes)}"
         )
@@ -164,6 +176,7 @@ class CognitiveRuntime:
             {"subject": subject, "predicate": predicate, "value": value}, importance=0.9, source="user_fact",
         )
         self.timeline.record(episode.summary, source="user_fact", importance=0.9, tags=[subject, predicate], event_id=episode.id, timestamp=episode.timestamp)
+        self.workspace.submit(episode.summary, WorkspaceKind.MEMORY, salience=0.9, confidence=belief.confidence, source="user_fact")
         change = self.change_detector.ingest_belief(self.state_history, subject=subject, predicate=predicate, value=value, confidence=belief.confidence, source="user_fact", evidence=[belief.id, episode.id])
         if change is not None:
             self.timeline.relate(change.evidence[0], episode.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
@@ -171,11 +184,21 @@ class CognitiveRuntime:
         return belief
 
     def think(self, user_text: str) -> str:
+        self.workspace.clear_cycle()
+        self.workspace.submit(user_text, WorkspaceKind.PERCEPTION, salience=0.9, confidence=0.98, source="user")
         context = self._retrieve_context(user_text)
         goal, decision = self._choose_goal()
         initiative = self.agency.request_initiative(goal, "durante interação") if goal else None
+        if initiative:
+            self.workspace.submit(f"Proposta: {initiative.action}", WorkspaceKind.POSSIBILITY, salience=0.7, confidence=0.7, source="initiative")
+        self.workspace.compete(
+            curiosity=self.state.affect.curiosity,
+            uncertainty=self.state.affect.uncertainty,
+            novelty=self.state.affect.novelty,
+        )
+        context["workspace"] = self.workspace.active_context()
         prompt = self._compose_context(user_text, context, goal.title if goal else None, initiative.action if initiative else None)
-        self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None, "decision_id": decision.id if decision else None}, source="runtime"))
+        self.bus.publish(CognitiveEvent(EventType.DECISION, {"goal": goal.title if goal else None, "initiative": initiative.action if initiative else None, "decision_id": decision.id if decision else None, "focus": self.workspace.active_context()}, source="runtime"))
         try:
             response = self.model.generate(prompt).strip()
         except Exception as exc:
@@ -196,8 +219,9 @@ class CognitiveRuntime:
         self.state.working_memory = self.state.working_memory[-24:]
         if decision and decision.chosen:
             self.decision_learning.record_outcome(decision.id, decision.goal, decision.chosen.option, decision.chosen.score, 0.25, True, [response_episode.id])
+        self.workspace.submit("Resposta produzida e experiência registada", WorkspaceKind.SELF_SIGNAL, salience=0.65, confidence=0.9, source="runtime")
         self.bus.publish(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7))
-        self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": True, "input": user_text, "output": response}, source="runtime"))
+        self.bus.publish(CognitiveEvent(EventType.EXPERIENCE, {"success": True, "input": user_text, "output": response, "focus": self.workspace.active_context()}, source="runtime"))
         return response
 
     def _retrieve_context(self, query: str) -> dict[str, list[str]]:
@@ -214,11 +238,12 @@ class CognitiveRuntime:
         temporal = [f"{item.timestamp}: {item.summary}" for item in self.timeline.recent(8)]
         changes = [f"{c.subject}.{c.property}: {c.old_value} → {c.new_value} ({c.permanence.value}, confiança={c.confidence:.2f})" for c in self.state_history.recent_changes(8)]
         decisions = [f"{o.goal} → {o.option}: recompensa={o.reward:.2f}, sucesso={o.success}" for o in self.decision_learning.recent(8)]
-        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship, "temporal": temporal, "changes": changes, "decisions": decisions}
+        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship, "temporal": temporal, "changes": changes, "decisions": decisions, "workspace": []}
 
     def _compose_context(self, user_text: str, context: dict[str, list[str]], goal: str | None, initiative: str | None = None) -> str:
         return "\n".join([
             "IDENTIDADE OPERACIONAL:", f"Nome: {self.self_model.name}", f"Relação: {self.self_model.relationship}", "Estado interno operacional: " + str(self.state.affect.__dict__),
+            "\nFOCO COGNITIVO GLOBAL:\n" + "\n".join(context.get("workspace", [])),
             "\nMODELO DA RELAÇÃO:\n" + "\n".join(context["relationship"]), "\nOBJETIVO ATIVO: " + (goal or "nenhum"), "\nINICIATIVA PROPOSTA: " + (initiative or "nenhuma"),
             "\nMEMÓRIA RECENTE:\n" + "\n".join(context["memory"]), "\nMEMÓRIA ASSOCIATIVA/EPISÓDICA:\n" + "\n".join(context["episodes"]),
             "\nCRENÇAS/FACTOS CONSOLIDADOS:\n" + "\n".join(context["beliefs"]), "\nMODELO DO MUNDO:\n" + "\n".join(context["world"]),
@@ -236,4 +261,5 @@ class CognitiveRuntime:
             "initiative": {"enabled": self.initiative.policy.enabled, "pending": [item.__dict__.copy() for item in self.initiative.pending]},
             "capabilities": {name: capability.__dict__.copy() for name, capability in self.agency.capabilities.items()},
             "autonomy": self.autonomy.snapshot(), "decision_learning": self.decision_learning.snapshot(),
+            "global_workspace": self.workspace.snapshot(),
         }
