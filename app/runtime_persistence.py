@@ -121,6 +121,10 @@ def restore_runtime_core(runtime: Any, snapshot: dict[str, Any]) -> None:
         data["autonomy_level"] = AutonomyLevel(data.get("autonomy_level", AutonomyLevel.CHOOSE))
         runtime.autonomy.decisions.append(AutonomyDecision(**data))
 
+    scheduler = snapshot.get("autonomy_scheduler")
+    if scheduler is not None:
+        runtime.autonomy_scheduler.restore(dict(scheduler))
+
     learning = snapshot.get("decision_learning", {})
     runtime.decision_learning.outcomes.clear()
     runtime.decision_learning.preferences.clear()
