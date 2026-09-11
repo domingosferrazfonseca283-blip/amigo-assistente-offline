@@ -22,6 +22,11 @@ class RuntimeCoordinator(context: Context, private val bridge: CognitiveBridge) 
         return response
     }
 
+    fun internalCycle(activity: String = "reflect") {
+        bridge.internalCycle(activity)
+        persist()
+    }
+
     fun persist() {
         store.save(bridge.snapshot())
     }
