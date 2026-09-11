@@ -43,8 +43,8 @@ class TemporalMemory:
         self.events: list[TimelineEvent] = []
         self.links: list[TemporalLink] = []
 
-    def record(self, summary: str, *, source: str = "experience", importance: float = 0.5, tags: list[str] | None = None) -> TimelineEvent:
-        event = TimelineEvent(summary, source=source, importance=max(0.0, min(1.0, importance)), tags=tags or [])
+    def record(self, summary: str, *, source: str = "experience", importance: float = 0.5, tags: list[str] | None = None, event_id: str | None = None, timestamp: str | None = None) -> TimelineEvent:
+        event = TimelineEvent(summary, timestamp=timestamp or datetime.now(timezone.utc).isoformat(), source=source, importance=max(0.0, min(1.0, importance)), tags=tags or [], id=event_id or uuid4().hex)
         self.events.append(event)
         if len(self.events) > self.max_events:
             self.events = self.events[-self.max_events:]
@@ -68,7 +68,4 @@ class TemporalMemory:
         return links[-limit:]
 
     def snapshot(self) -> dict[str, Any]:
-        return {
-            "events": [asdict(event) for event in self.events],
-            "links": [asdict(link) | {"relation": link.relation.value} for link in self.links],
-        }
+        return {"events": [asdict(event) for event in self.events], "links": [asdict(link) | {"relation": link.relation.value} for link in self.links]}
