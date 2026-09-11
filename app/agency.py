@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
 from uuid import uuid4
 
 from .goals import Goal
@@ -56,7 +55,7 @@ class Initiative:
 
 
 class AgencyEngine:
-    """Transforma objetivos em planos, mas nunca concede permissões por conta própria."""
+    """Transforma objetivos em planos sem inventar capacidades ou permissões."""
 
     def __init__(self) -> None:
         self.capabilities: dict[str, ActionCapability] = {}
@@ -66,14 +65,7 @@ class AgencyEngine:
         self.capabilities[capability.name] = capability
 
     def plan_for(self, goal: Goal) -> Plan:
-        # Planeamento inicial deliberadamente genérico: o planner local pode
-        # ser substituído por um planeador mais sofisticado sem alterar a API.
-        steps = [PlanStep(
-            action=f"analisar_proximo_passo:{goal.title}",
-            reason="avançar o objetivo ativo com o menor compromisso possível",
-            risk=ActionRisk.NONE,
-            requires_confirmation=False,
-        )]
+        steps = [PlanStep("internal_reflection", "analisar o próximo passo do objetivo sem tocar no dispositivo", ActionRisk.NONE, False)]
         plan = Plan(goal.id, steps, confidence=0.55)
         self.plans[goal.id] = plan
         return plan
@@ -84,16 +76,7 @@ class AgencyEngine:
         plan = self.plans.get(goal.id) or self.plan_for(goal)
         step = plan.steps[0]
         capability = self.capabilities.get(step.action)
-        if capability is not None and not capability.enabled:
+        if capability is None or not capability.enabled or capability.permission == PermissionMode.DENY:
             return None
-        requires = step.requires_confirmation
-        if capability is not None:
-            requires = requires or capability.permission != PermissionMode.ALLOW
-            if not capability.background_allowed:
-                requires = True
-        return Initiative(
-            reason=f"Objetivo ativo: {goal.title}. Contexto: {context}",
-            goal_id=goal.id,
-            action=step.action,
-            requires_confirmation=requires,
-        )
+        requires = step.requires_confirmation or capability.permission != PermissionMode.ALLOW or not capability.background_allowed
+        return Initiative(reason=f"Objetivo ativo: {goal.title}. Contexto: {context}", goal_id=goal.id, action=step.action, requires_confirmation=requires)
