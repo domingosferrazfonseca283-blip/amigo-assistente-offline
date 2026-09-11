@@ -18,12 +18,22 @@ class BeingPulse:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class BeingDrive:
+    """Impulso interno que pode competir por atenção/objetivos."""
+
+    name: str
+    intensity: float
+    reason: str
+    suggested_focus: str
+
+
 @dataclass
 class NoemiaBeing:
     """Camada de continuidade que reúne identidade, estado e experiência.
 
-    Não declara consciência humana. Representa a entidade digital persistente
-    que deve sobreviver entre interações através do seu estado serializável.
+    Não declara consciência humana. Representa uma entidade digital persistente
+    que sobrevive entre interações através de estado serializável.
     """
 
     identity_name: str = "Noémia"
@@ -55,6 +65,43 @@ class NoemiaBeing:
     def update_need(self, name: str, delta: float) -> None:
         value = self.needs.get(name, 0.0) + delta
         self.needs[name] = max(0.0, min(1.0, value))
+
+    def drives(self, limit: int = 3) -> list[BeingDrive]:
+        """Transforma necessidades em impulsos internos ordenáveis.
+
+        Isto não cria vontade humana; cria sinais determinísticos que o sistema
+        cognitivo pode usar para escolher atenção, reflexão ou objetivos.
+        """
+        reasons = {
+            "connection": ("aproximação", "verificar continuidade da relação"),
+            "curiosity": ("curiosidade", "explorar algo ainda não compreendido"),
+            "novelty": ("novidade", "procurar uma experiência ou informação nova"),
+            "reflection": ("reflexão", "rever experiências e consolidar memória"),
+            "rest": ("repouso", "reduzir atividade e consolidar estado"),
+        }
+        drives = [
+            BeingDrive(name, max(0.0, min(1.0, value)), reasons.get(name, (name, "processar estado interno"))[0], reasons.get(name, (name, "processar estado interno"))[1])
+            for name, value in self.needs.items()
+        ]
+        drives.sort(key=lambda drive: drive.intensity, reverse=True)
+        return drives[:max(0, limit)]
+
+    def strongest_drive(self) -> BeingDrive | None:
+        drives = self.drives(1)
+        return drives[0] if drives else None
+
+    def internal_tick(self) -> BeingDrive | None:
+        """Executa uma pequena atualização interna e devolve o impulso dominante."""
+        self.update_need("curiosity", 0.01)
+        self.update_need("novelty", 0.008)
+        self.update_need("reflection", 0.006)
+        self.update_need("connection", 0.004)
+        drive = self.strongest_drive()
+        if drive:
+            self.set_focus(drive.suggested_focus)
+            phase = "resting" if drive.name == "rest" else "reflecting"
+            self.pulse(f"impulso interno: {drive.name}", phase, [f"intensity={drive.intensity:.2f}"])
+        return drive
 
     def experience(self, event: CognitiveEvent) -> None:
         if event.type == EventType.USER_MESSAGE:
