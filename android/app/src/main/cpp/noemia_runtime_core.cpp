@@ -103,7 +103,7 @@ std::string RuntimeCore::execute(const std::string& request_json) {
         out << ",\"last_activity\":\"" << json_escape(last_activity_) << "\"";
         out << ",\"affect_state\":\"" << json_escape(affect_state_) << "\"";
         out << ",\"current_focus\":\"" << json_escape(focus_) << "\"";
-        out << ",\"needs\":{"connection\":" << connection_;
+        out << ",\"needs\":{\"connection\":" << connection_;
         out << ",\"curiosity\":" << curiosity_ << ",\"novelty\":" << novelty_;
         out << ",\"reflection\":" << reflection_ << ",\"rest\":" << rest_ << "}";
         out << "}},\"error\":null,\"request_id\":\"" << json_escape(request_id) << "\"}";
