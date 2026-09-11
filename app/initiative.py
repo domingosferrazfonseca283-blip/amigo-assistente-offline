@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from .agency import AgencyEngine, Initiative
-from .goals import GoalManager
+from .goals import Goal, GoalManager
 
 
 @dataclass
@@ -26,16 +26,16 @@ class InitiativeEngine:
         self._last_generated: datetime | None = None
         self.pending: list[Initiative] = []
 
-    def evaluate(self, context: str = "inatividade") -> Initiative | None:
+    def evaluate(self, context: str = "inatividade", goal: Goal | None = None) -> Initiative | None:
         if not self.policy.enabled or len(self.pending) >= self.policy.max_pending:
             return None
         now = datetime.now(timezone.utc)
         if self._last_generated is not None and now - self._last_generated < timedelta(seconds=self.policy.cooldown_seconds):
             return None
-        goal = self.goals.top()
-        if goal is None or goal.priority < self.policy.min_priority:
+        selected_goal = goal or self.goals.top()
+        if selected_goal is None or selected_goal.priority < self.policy.min_priority:
             return None
-        initiative = self.agency.request_initiative(goal, context)
+        initiative = self.agency.request_initiative(selected_goal, context)
         if initiative is None:
             return None
         if self.policy.require_confirmation:
