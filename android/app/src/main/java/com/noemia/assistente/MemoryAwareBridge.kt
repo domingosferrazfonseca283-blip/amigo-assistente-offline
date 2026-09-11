@@ -6,11 +6,15 @@ import org.json.JSONObject
 class MemoryAwareBridge(private val memory: LongTermMemoryStore) : CognitiveBridge {
     private var turnCount = 0
     private var lastInput = ""
+    private var internalCycleCount = 0
+    private var lastInternalActivity = ""
 
     override fun restore(snapshot: JSONObject?) {
         if (snapshot == null) return
         turnCount = snapshot.optInt("turn_count", 0)
         lastInput = snapshot.optString("last_input", "")
+        internalCycleCount = snapshot.optInt("internal_cycle_count", 0)
+        lastInternalActivity = snapshot.optString("last_internal_activity", "")
         memory.restore(snapshot.optJSONObject("long_term_memory"))
     }
 
@@ -37,8 +41,20 @@ class MemoryAwareBridge(private val memory: LongTermMemoryStore) : CognitiveBrid
         }
     }
 
+    override fun internalCycle(activity: String) {
+        internalCycleCount++
+        lastInternalActivity = activity
+        memory.addEpisode(
+            "Ciclo interno: $activity",
+            JSONObject().put("type", "internal_cognition").put("cycle", internalCycleCount),
+            0.35
+        )
+    }
+
     override fun snapshot(): JSONObject = JSONObject()
         .put("turn_count", turnCount)
         .put("last_input", lastInput)
+        .put("internal_cycle_count", internalCycleCount)
+        .put("last_internal_activity", lastInternalActivity)
         .put("long_term_memory", memory.snapshot())
 }
