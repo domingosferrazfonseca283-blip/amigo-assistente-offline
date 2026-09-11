@@ -15,25 +15,22 @@ import kotlin.math.sin
 /**
  * Janela visual da Noémia.
  *
- * Não guarda estado cognitivo próprio: lê apenas o último snapshot persistido
- * pelo runtime e transforma fase/necessidades em expressão visual.
+ * Não guarda estado cognitivo próprio: lê snapshots persistidos,
+ * cria um estado visual transitório e interpola a expressão ao longo do tempo.
  */
 class NoemiaPresenceView(context: Context) : View(context) {
     private val store = NoemiaStore(context.applicationContext)
     private val handler = Handler(Looper.getMainLooper())
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var phase = "resting"
-    private var curiosity = 0.40f
-    private var connection = 0.50f
-    private var novelty = 0.30f
-    private var reflection = 0.40f
+    private var targetState = PresenceState()
+    private var visualState = PresenceState()
     private var startedAt = System.nanoTime()
 
     private val refresh = object : Runnable {
         override fun run() {
             readState()
             invalidate()
-            handler.postDelayed(this, 500L)
+            handler.postDelayed(this, 100L)
         }
     }
 
@@ -55,29 +52,43 @@ class NoemiaPresenceView(context: Context) : View(context) {
 
     private fun readState() {
         val saved = store.load() ?: return
-        val runtime = saved.optJSONObject("runtime") ?: saved
-        val being = runtime.optJSONObject("being") ?: return
-        phase = being.optString("phase", phase)
-        val needs = being.optJSONObject("needs") ?: return
-        curiosity = needs.optDouble("curiosity", curiosity.toDouble()).toFloat().coerceIn(0f, 1f)
-        connection = needs.optDouble("connection", connection.toDouble()).toFloat().coerceIn(0f, 1f)
-        novelty = needs.optDouble("novelty", novelty.toDouble()).toFloat().coerceIn(0f, 1f)
-        reflection = needs.optDouble("reflection", reflection.toDouble()).toFloat().coerceIn(0f, 1f)
+        targetState = PresenceState.fromRuntime(saved)
     }
+
+    private fun smoothState(): PresenceState {
+        val phase = if (visualState.phase == targetState.phase) {
+            visualState.phase
+        } else {
+            targetState.phase
+        }
+        val factor = 0.14f
+        visualState = visualState.copy(
+            phase = phase,
+            curiosity = lerp(visualState.curiosity, targetState.curiosity, factor),
+            connection = lerp(visualState.connection, targetState.connection, factor),
+            novelty = lerp(visualState.novelty, targetState.novelty, factor),
+            reflection = lerp(visualState.reflection, targetState.reflection, factor),
+        )
+        return visualState
+    }
+
+    private fun lerp(from: Float, to: Float, amount: Float): Float =
+        from + (to - from) * amount
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val state = smoothState()
         val cx = width * 0.5f
         val cy = height * 0.54f
         val radius = min(width, height) * 0.235f
         val time = (System.nanoTime() - startedAt) / 1_000_000_000.0
-        val breathSpeed = when (phase) {
+        val breathSpeed = when (state.phase) {
             "perceiving" -> 1.65
             "expressing" -> 1.9
             "reflecting" -> 0.72
             else -> 1.15
         }
-        val breathAmount = when (phase) {
+        val breathAmount = when (state.phase) {
             "expressing" -> 0.022f
             "perceiving" -> 0.016f
             "reflecting" -> 0.009f
@@ -86,19 +97,20 @@ class NoemiaPresenceView(context: Context) : View(context) {
         val breath = (sin(time * breathSpeed) * breathAmount).toFloat()
         val r = radius * (1f + breath)
 
-        drawAura(canvas, cx, cy, r)
+        drawAura(canvas, cx, cy, r, state)
         drawHead(canvas, cx, cy, r)
-        drawEyes(canvas, cx, cy, r, time)
+        drawEyes(canvas, cx, cy, r, time, state)
     }
 
-    private fun drawAura(canvas: Canvas, cx: Float, cy: Float, r: Float) {
-        val activity = when (phase) {
+    private fun drawAura(canvas: Canvas, cx: Float, cy: Float, r: Float, state: PresenceState) {
+        val activity = when (state.phase) {
             "perceiving" -> 1.0f
             "expressing" -> 0.95f
             "reflecting" -> 0.78f
             else -> 0.58f
         }
-        val intensity = (0.35f + curiosity * 0.35f + novelty * 0.20f + activity * 0.25f).coerceIn(0.25f, 1f)
+        val intensity = (0.35f + state.curiosity * 0.35f + state.novelty * 0.20f + activity * 0.25f)
+            .coerceIn(0.25f, 1f)
         paint.shader = RadialGradient(
             cx, cy, r * 1.55f,
             intArrayOf(
@@ -132,17 +144,17 @@ class NoemiaPresenceView(context: Context) : View(context) {
         paint.alpha = 255
     }
 
-    private fun drawEyes(canvas: Canvas, cx: Float, cy: Float, r: Float, time: Double) {
+    private fun drawEyes(canvas: Canvas, cx: Float, cy: Float, r: Float, time: Double, state: PresenceState) {
         val eyeY = cy - r * 0.05f
         val eyeSpacing = r * 0.43f
         val eyeR = r * 0.23f
         val blink = blinkAmount(time)
-        val gaze = when (phase) {
-            "perceiving", "expressing" -> 0.025f + connection * 0.018f
+        val gaze = when (state.phase) {
+            "perceiving", "expressing" -> 0.025f + state.connection * 0.018f
             "reflecting" -> -0.018f
             else -> 0f
         }
-        val gazeVertical = when (phase) {
+        val gazeVertical = when (state.phase) {
             "reflecting" -> -0.018f
             "perceiving" -> -0.006f
             else -> 0f
