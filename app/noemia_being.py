@@ -30,10 +30,10 @@ class BeingDrive:
 
 @dataclass
 class NoemiaBeing:
-    """Camada de continuidade que reúne identidade, estado e experiência.
+    """Camada de continuidade de uma entidade digital persistente.
 
-    Não declara consciência humana. Representa uma entidade digital persistente
-    que sobrevive entre interações através de estado serializável.
+    Não declara consciência humana. Representa identidade, estado, necessidades
+    e experiência acumuláveis ao longo do tempo.
     """
 
     identity_name: str = "Noémia"
@@ -66,12 +66,33 @@ class NoemiaBeing:
         value = self.needs.get(name, 0.0) + delta
         self.needs[name] = max(0.0, min(1.0, value))
 
-    def drives(self, limit: int = 3) -> list[BeingDrive]:
-        """Transforma necessidades em impulsos internos ordenáveis.
+    def _apply_elapsed_time(self) -> float:
+        """Transforma tempo decorrido em pressão interna acumulável.
 
-        Isto não cria vontade humana; cria sinais determinísticos que o sistema
-        cognitivo pode usar para escolher atenção, reflexão ou objetivos.
+        O relógio não é tratado como emoção real: é apenas um mecanismo de
+        continuidade que impede o estado interno de ficar congelado enquanto
+        o processo está parado.
         """
+        if not self.last_seen_at:
+            return 0.0
+        try:
+            previous = datetime.fromisoformat(self.last_seen_at)
+            if previous.tzinfo is None:
+                previous = previous.replace(tzinfo=timezone.utc)
+            elapsed_minutes = max(0.0, (datetime.now(timezone.utc) - previous).total_seconds() / 60.0)
+        except ValueError:
+            return 0.0
+
+        # Crescimento limitado por tick: tempo longo aumenta pressão, mas não
+        # permite que um telefone desligado durante semanas sature instantaneamente.
+        pressure = min(elapsed_minutes, 60.0)
+        self.update_need("connection", 0.0007 * pressure)
+        self.update_need("curiosity", 0.0010 * pressure)
+        self.update_need("novelty", 0.0008 * pressure)
+        self.update_need("reflection", 0.0006 * pressure)
+        return elapsed_minutes
+
+    def drives(self, limit: int = 3) -> list[BeingDrive]:
         reasons = {
             "connection": ("aproximação", "verificar continuidade da relação"),
             "curiosity": ("curiosidade", "explorar algo ainda não compreendido"),
@@ -91,7 +112,8 @@ class NoemiaBeing:
         return drives[0] if drives else None
 
     def internal_tick(self) -> BeingDrive | None:
-        """Executa uma pequena atualização interna e devolve o impulso dominante."""
+        """Executa um ciclo interno, incluindo a pressão do tempo decorrido."""
+        elapsed_minutes = self._apply_elapsed_time()
         self.update_need("curiosity", 0.01)
         self.update_need("novelty", 0.008)
         self.update_need("reflection", 0.006)
@@ -100,7 +122,10 @@ class NoemiaBeing:
         if drive:
             self.set_focus(drive.suggested_focus)
             phase = "resting" if drive.name == "rest" else "reflecting"
-            self.pulse(f"impulso interno: {drive.name}", phase, [f"intensity={drive.intensity:.2f}"])
+            notes = [f"intensity={drive.intensity:.2f}"]
+            if elapsed_minutes >= 1.0:
+                notes.append(f"tempo_decorrido_min={elapsed_minutes:.1f}")
+            self.pulse(f"impulso interno: {drive.name}", phase, notes)
         return drive
 
     def experience(self, event: CognitiveEvent) -> None:
@@ -126,13 +151,7 @@ class NoemiaBeing:
             "needs": dict(self.needs),
             "current_focus": self.current_focus,
             "recent_pulses": [
-                {
-                    "sequence": p.sequence,
-                    "timestamp": p.timestamp,
-                    "reason": p.reason,
-                    "phase": p.phase,
-                    "notes": list(p.notes),
-                }
+                {"sequence": p.sequence, "timestamp": p.timestamp, "reason": p.reason, "phase": p.phase, "notes": list(p.notes)}
                 for p in self.recent_pulses
             ],
         }
@@ -148,10 +167,8 @@ class NoemiaBeing:
             current_focus=data.get("current_focus"),
         )
         being.recent_pulses = [BeingPulse(
-            int(item.get("sequence", 0)),
-            str(item.get("timestamp", "")),
-            str(item.get("reason", "")),
-            str(item.get("phase", "resting")),
+            int(item.get("sequence", 0)), str(item.get("timestamp", "")),
+            str(item.get("reason", "")), str(item.get("phase", "resting")),
             list(item.get("notes", [])),
         ) for item in data.get("recent_pulses", [])][-64:]
         return being
