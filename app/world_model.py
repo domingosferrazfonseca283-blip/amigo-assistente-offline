@@ -17,7 +17,7 @@ class WorldFact:
 
 
 class WorldModel:
-    """Modelo local do que Noémia considera verdadeiro sobre o seu contexto."""
+    """Modelo local do contexto, mantendo afirmações como observações e não como verdades absolutas."""
 
     def __init__(self) -> None:
         self._facts: list[WorldFact] = []
@@ -25,8 +25,11 @@ class WorldModel:
     def observe(self, fact: WorldFact) -> None:
         self._facts.append(fact)
 
-    def remember_user_statement(self, statement: str, confidence: float = 0.95) -> None:
+    def observe_user_statement(self, statement: str, confidence: float = 0.95) -> None:
         self.observe(WorldFact("user", "stated", statement, confidence, "user"))
+
+    def remember_user_statement(self, statement: str, confidence: float = 0.95) -> None:
+        self.observe_user_statement(statement, confidence)
 
     def query(self, subject: str | None = None, predicate: str | None = None) -> list[WorldFact]:
         return [
