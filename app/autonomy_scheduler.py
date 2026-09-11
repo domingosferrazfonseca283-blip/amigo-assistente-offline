@@ -74,9 +74,9 @@ class AutonomyScheduler:
         if top is not None:
             tasks.append(InternalTask(f"Reavaliar objetivo: {top.title}", AttentionReason.GOAL, top.priority, top.id))
         if curiosity >= 0.65 or novelty >= 0.70:
-            tasks.append(InternalTask("Explorar informação local nova ou pouco compreendida", AttentionReason.CURIOSITY, max(curiosity, novelty)))
+            tasks.append(InternalTask("Explorar informação local nova ou pouco compreendida", AttentionReason.CURIOSITY, max(curiosity, novelty), evidence=[f"curiosidade={curiosity:.2f}", f"novidade={novelty:.2f}"]))
         if uncertainty >= 0.70:
-            tasks.append(InternalTask("Reexaminar uma hipótese com incerteza elevada", AttentionReason.ANOMALY, uncertainty))
+            tasks.append(InternalTask("Reexaminar uma hipótese com incerteza elevada", AttentionReason.ANOMALY, uncertainty, evidence=[f"incerteza={uncertainty:.2f}"]))
         return sorted(tasks, key=lambda item: item.priority, reverse=True)
 
     def complete(self, task_id: str) -> InternalTask | None:
@@ -87,6 +87,17 @@ class AutonomyScheduler:
                 self.history = self.history[-500:]
                 return task
         return None
+
+    def restore(self, snapshot: dict) -> None:
+        self.budget = AutonomyBudget(**dict(snapshot.get("budget", {})))
+        self.pending = [
+            InternalTask(**{**dict(item), "reason": AttentionReason(dict(item).get("reason", AttentionReason.MAINTENANCE))})
+            for item in snapshot.get("pending", [])
+        ]
+        self.history = [
+            InternalTask(**{**dict(item), "reason": AttentionReason(dict(item).get("reason", AttentionReason.MAINTENANCE))})
+            for item in snapshot.get("history", [])
+        ]
 
     def snapshot(self) -> dict:
         return {
