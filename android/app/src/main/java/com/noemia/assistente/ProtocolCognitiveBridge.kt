@@ -13,12 +13,15 @@ class ProtocolCognitiveBridge(
 
     override fun restore(snapshot: JSONObject?) {
         if (snapshot == null) return
-        transport.execute(
+        val response = transport.execute(
             RuntimeRequest(
                 command = RuntimeCommands.SNAPSHOT,
                 payload = JSONObject().put("restore", snapshot)
             )
         )
+        if (!response.ok) {
+            throw IllegalStateException(response.error ?: "Falha ao restaurar o núcleo cognitivo local")
+        }
     }
 
     override fun perceive(kind: String, payload: JSONObject) {
