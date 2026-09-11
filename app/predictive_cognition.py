@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from .expectation_engine import Expectation, ExpectationEngine, ExpectationResult
+from .expectation_engine import Expectation, ExpectationEngine, ExpectationResult, ExpectationStatus
 from .pattern_memory import PatternDetector, PatternKind, PatternMemory, PatternObservation
 from .state_change import StateHistory
 
@@ -32,18 +32,11 @@ class PredictionObservation:
 class PredictiveCognition:
     """Converte padrões locais suficientemente fortes em expectativas testáveis.
 
-    A camada é deliberadamente conservadora: um padrão observado gera uma hipótese
-    sobre o próximo estado, não uma afirmação de causalidade ou certeza.
+    Um padrão observado gera uma hipótese sobre o próximo estado, não uma
+    afirmação de causalidade ou certeza.
     """
 
-    def __init__(
-        self,
-        state_history: StateHistory,
-        patterns: PatternMemory | None = None,
-        detector: PatternDetector | None = None,
-        expectations: ExpectationEngine | None = None,
-        max_predictions: int = 2000,
-    ) -> None:
+    def __init__(self, state_history: StateHistory, patterns: PatternMemory | None = None, detector: PatternDetector | None = None, expectations: ExpectationEngine | None = None, max_predictions: int = 2000) -> None:
         self.state_history = state_history
         self.patterns = patterns or PatternMemory()
         self.detector = detector or PatternDetector()
@@ -63,89 +56,38 @@ class PredictiveCognition:
         return None
 
     def _active_learned_expectation(self, subject: str, property: str) -> Expectation | None:
-        candidates = [
-            item for item in self.expectations.active(limit=100)
-            if item.subject == subject
-            and item.property == property
-            and item.source == "learned_pattern"
-        ]
+        candidates = [item for item in self.expectations.active(limit=100) if item.subject == subject and item.property == property and item.source == "learned_pattern"]
         return max(candidates, key=lambda item: item.confidence, default=None)
 
     def learn_prediction(self, subject: str, property: str) -> PredictionObservation | None:
         found = self.detector.detect(self.state_history, self.patterns, subject=subject, property=property)
-        candidates = []
-        for pattern in found:
-            predicted = self._next_value(pattern)
-            if predicted is not None:
-                candidates.append((pattern, predicted))
+        candidates = [(pattern, self._next_value(pattern)) for pattern in found]
+        candidates = [(pattern, predicted) for pattern, predicted in candidates if predicted is not None]
         if not candidates:
             return None
 
         pattern, predicted = max(candidates, key=lambda item: item[0].confidence)
-        # Calibration margin: predictions inherit evidence quality, but never its
-        # full confidence, because extrapolation is an additional uncertainty.
         confidence = max(0.05, min(0.90, pattern.confidence * 0.85))
         evidence = list(dict.fromkeys([pattern.id, *pattern.evidence]))[-20:]
 
         current = self._active_learned_expectation(subject, property)
         if current is not None and self.expectations._same(current.expected, predicted):
-            return PredictionObservation(
-                Prediction(subject, property, predicted, current.confidence, pattern.id, pattern.kind, evidence),
-                current,
-            )
+            return PredictionObservation(Prediction(subject, property, predicted, current.confidence, pattern.id, pattern.kind, evidence), current)
         if current is not None:
-            current.status = current.status.VIOLATED
+            current.status = ExpectationStatus.EXPIRED
 
         prediction = Prediction(subject, property, predicted, confidence, pattern.id, pattern.kind, evidence)
-        expectation = self.expectations.expect(
-            subject,
-            property,
-            predicted,
-            confidence=confidence,
-            source="learned_pattern",
-            evidence=evidence,
-        )
+        expectation = self.expectations.expect(subject, property, predicted, confidence=confidence, source="learned_pattern", evidence=evidence)
         self.predictions.append(prediction)
-        self.predictions = self.predictions[-self.max_predictions :]
+        self.predictions = self.predictions[-self.max_predictions:]
         return PredictionObservation(prediction, expectation)
 
-    def observe_actual(
-        self,
-        subject: str,
-        property: str,
-        value: Any,
-        *,
-        confidence: float = 0.5,
-        evidence: list[str] | None = None,
-    ) -> ExpectationResult | None:
-        return self.expectations.observe(
-            subject,
-            property,
-            value,
-            confidence=confidence,
-            evidence=evidence,
-        )
+    def observe_actual(self, subject: str, property: str, value: Any, *, confidence: float = 0.5, evidence: list[str] | None = None) -> ExpectationResult | None:
+        return self.expectations.observe(subject, property, value, confidence=confidence, evidence=evidence)
 
-    def observe_and_learn(
-        self,
-        subject: str,
-        property: str,
-        value: Any,
-        *,
-        source: str = "observation",
-        confidence: float = 0.5,
-        evidence: list[str] | None = None,
-    ) -> tuple[ExpectationResult | None, PredictionObservation | None]:
-        # Primeiro testa a expectativa anterior; só depois aprende uma nova.
+    def observe_and_learn(self, subject: str, property: str, value: Any, *, source: str = "observation", confidence: float = 0.5, evidence: list[str] | None = None) -> tuple[ExpectationResult | None, PredictionObservation | None]:
         result = self.observe_actual(subject, property, value, confidence=confidence, evidence=evidence)
-        self.state_history.observe(
-            subject,
-            property,
-            value,
-            source=source,
-            confidence=confidence,
-            evidence=evidence,
-        )
+        self.state_history.observe(subject, property, value, source=source, confidence=confidence, evidence=evidence)
         learned = self.learn_prediction(subject, property)
         return result, learned
 
@@ -153,6 +95,4 @@ class PredictiveCognition:
         return self.expectations.predict(subject, property)
 
     def snapshot(self) -> dict[str, Any]:
-        return {
-            "predictions": [asdict(item) | {"pattern_kind": item.pattern_kind.value} for item in self.predictions[-100:]],
-        }
+        return {"predictions": [asdict(item) | {"pattern_kind": item.pattern_kind.value} for item in self.predictions[-100:]]}
