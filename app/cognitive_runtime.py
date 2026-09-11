@@ -19,17 +19,18 @@ from .memory_retrieval import CognitiveMemoryRetriever
 from .relationship_model import RelationshipModel
 from .semantic_memory import SemanticMemory
 from .self_model import SelfModel
+from .state_change import ChangeDetectionEngine, StateHistory
+from .temporal_memory import TemporalMemory, TemporalRelation
+from .temporal_reasoning import TemporalReasoningEngine
 from .world_model import WorldModel
 
 
 class LocalModel(Protocol):
-    def generate(self, prompt: str) -> str:
-        ...
+    def generate(self, prompt: str) -> str: ...
 
 
 class LocalKnowledge(Protocol):
-    def search(self, query: str, limit: int = 5) -> list[str]:
-        ...
+    def search(self, query: str, limit: int = 5) -> list[str]: ...
 
 
 @dataclass
@@ -50,6 +51,10 @@ class CognitiveRuntime:
         self.associations = AssociativeMemory()
         self.memory_retriever = CognitiveMemoryRetriever(self.episodic, self.semantic, self.associations)
         self.relationship = RelationshipModel()
+        self.timeline = TemporalMemory()
+        self.temporal_reasoning = TemporalReasoningEngine()
+        self.state_history = StateHistory()
+        self.change_detector = ChangeDetectionEngine()
         self.agency = AgencyEngine()
         self._register_internal_capabilities()
         self.initiative = InitiativeEngine(self.goals, self.agency, InitiativePolicy())
@@ -74,6 +79,7 @@ class CognitiveRuntime:
         self.state.touch()
         self.state.turn_count += 1
         self.affect.on_input(text)
+        topics = self._extract_topics(text)
         episode = self.episodic.record(
             "Interação recebida: " + text,
             {"event_id": event.id, "role": "user"},
@@ -82,7 +88,7 @@ class CognitiveRuntime:
             source="perception",
         )
         self.associations.add_node(MemoryNode(episode.id, "episode", episode.summary, episode.salience))
-        topics = self._extract_topics(text)
+        self.timeline.record(episode.summary, source="perception", importance=event.importance, tags=topics, event_id=episode.id, timestamp=episode.timestamp)
         self.relationship.observe(text, topics=topics, important=event.importance >= 0.9, episode_id=episode.id)
         self.world.observe_user_statement(text, confidence=0.95)
         self.state.working_memory.append({"type": "user", "text": text, "event_id": event.id})
@@ -91,7 +97,8 @@ class CognitiveRuntime:
     @staticmethod
     def _extract_topics(text: str) -> list[str]:
         words = [word.strip(".,!?;:()[]{}\"'").lower() for word in text.split()]
-        return list(dict.fromkeys(word for word in words if len(word) >= 5))[:8]
+        stop = {"sobre", "quero", "tenho", "estou", "porque", "quando", "também", "muito", "para", "como", "mais", "menos", "essa", "esse", "isso", "ainda", "vamos"}
+        return list(dict.fromkeys(word for word in words if len(word) >= 5 and word not in stop))[:8]
 
     def create_goal(self, title: str, priority: float = 0.5, source: str = "user"):
         goal = self.goals.add(title, priority, source)
@@ -103,10 +110,7 @@ class CognitiveRuntime:
     def evaluate_initiative(self, context: str = "inatividade"):
         initiative = self.initiative.evaluate(context)
         if initiative is not None:
-            self.bus.publish(CognitiveEvent(EventType.ACTION_REQUESTED, {
-                "action": initiative.action, "goal_id": initiative.goal_id,
-                "requires_confirmation": initiative.requires_confirmation, "reason": initiative.reason,
-            }, source="initiative", importance=0.75))
+            self.bus.publish(CognitiveEvent(EventType.ACTION_REQUESTED, {"action": initiative.action, "goal_id": initiative.goal_id, "requires_confirmation": initiative.requires_confirmation, "reason": initiative.reason}, source="initiative", importance=0.75))
         return initiative
 
     def approve_initiative(self, index: int = 0):
@@ -116,18 +120,27 @@ class CognitiveRuntime:
         report = self.consolidator.run()
         from .memory_consolidation import MemoryConsolidator
         graph_report = MemoryConsolidator().consolidate(self.episodic, self.semantic, self.associations)
+        temporal_report = self.temporal_reasoning.analyze(self.episodic, self.relationship, self.timeline)
+        for change in self.state_history.recent_changes(limit=20):
+            self.timeline.relate(change.evidence[0] if change.evidence else change.id, change.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
         self.state.reflections.append(
-            f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}"
+            f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}; tempo: {temporal_report.events_linked} ligações, {temporal_report.repetitions_found} repetições, {temporal_report.possible_changes} mudanças possíveis; histórico: {len(self.state_history.changes)} mudanças"
         )
         self.state.reflections = self.state.reflections[-100:]
+        self.bus.publish(CognitiveEvent(EventType.CONSOLIDATION, {"memory": report.__dict__, "graph": graph_report.__dict__, "temporal": temporal_report.__dict__, "changes": len(self.state_history.changes)}, source="consolidation", importance=0.6))
         return report
 
     def learn_user_fact(self, subject: str, predicate: str, value: object):
         belief = self.semantic.learn_user_fact(subject, predicate, value)
-        self.episodic.record(
+        episode = self.episodic.record(
             f"Facto fornecido pelo utilizador: {subject} {predicate} {value}",
             {"subject": subject, "predicate": predicate, "value": value}, importance=0.9, source="user_fact",
         )
+        self.timeline.record(episode.summary, source="user_fact", importance=0.9, tags=[subject, predicate], event_id=episode.id, timestamp=episode.timestamp)
+        change = self.change_detector.ingest_belief(self.state_history, subject=subject, predicate=predicate, value=value, confidence=belief.confidence, source="user_fact", evidence=[belief.id, episode.id])
+        if change is not None:
+            self.timeline.relate(change.evidence[0], episode.id, TemporalRelation.CHANGES, change.confidence, change.evidence)
+            self.bus.publish(CognitiveEvent(EventType.WORLD_UPDATED, {"subject": subject, "property": predicate, "old": change.old_value, "new": change.new_value, "change_id": change.id, "permanence": change.permanence.value}, source="state_history", importance=0.85))
         return belief
 
     def think(self, user_text: str) -> str:
@@ -148,8 +161,8 @@ class CognitiveRuntime:
         self.affect.on_success()
         self.memory.add("user", user_text)
         self.memory.add("assistant", response)
-        self.episodic.record("Resposta e experiência de interação", {"input": user_text, "output": response, "success": True}, importance=0.65, emotional_salience=self.state.affect.novelty, source="runtime")
-        self.relationship.observe(user_text, topics=self._extract_topics(user_text))
+        response_episode = self.episodic.record("Resposta e experiência de interação", {"input": user_text, "output": response, "success": True}, importance=0.65, emotional_salience=self.state.affect.novelty, source="runtime")
+        self.timeline.record(response_episode.summary, source="runtime", importance=0.65, tags=self._extract_topics(user_text), event_id=response_episode.id, timestamp=response_episode.timestamp)
         self.state.working_memory.append({"type": "assistant", "text": response})
         self.state.working_memory = self.state.working_memory[-24:]
         self.bus.publish(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7))
@@ -164,39 +177,29 @@ class CognitiveRuntime:
         world = [f"{f.subject} | {f.predicate} | {f.value} (confiança={f.confidence:.2f})" for f in self.world.relevant(query)]
         knowledge: list[str] = []
         if self.knowledge is not None:
-            try:
-                knowledge = self.knowledge.search(query, limit=8)
-            except Exception:
-                knowledge = []
-        relationship = [
-            f"familiaridade={self.relationship.relationship.familiarity:.2f}",
-            f"continuidade={self.relationship.relationship.continuity_score:.2f}",
-            "tópicos partilhados=" + ", ".join(sorted(self.relationship.relationship.shared_topics, key=self.relationship.relationship.shared_topics.get, reverse=True)[:8]),
-        ]
-        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship}
+            try: knowledge = self.knowledge.search(query, limit=8)
+            except Exception: knowledge = []
+        relationship = [f"familiaridade={self.relationship.relationship.familiarity:.2f}", f"continuidade={self.relationship.relationship.continuity_score:.2f}", "tópicos partilhados=" + ", ".join(sorted(self.relationship.relationship.shared_topics, key=self.relationship.relationship.shared_topics.get, reverse=True)[:8])]
+        temporal = [f"{item.timestamp}: {item.summary}" for item in self.timeline.recent(8)]
+        changes = [f"{c.subject}.{c.property}: {c.old_value} → {c.new_value} ({c.permanence.value}, confiança={c.confidence:.2f})" for c in self.state_history.recent_changes(8)]
+        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship, "temporal": temporal, "changes": changes}
 
     def _compose_context(self, user_text: str, context: dict[str, list[str]], goal: str | None, initiative: str | None = None) -> str:
         return "\n".join([
-            "IDENTIDADE OPERACIONAL:", f"Nome: {self.self_model.name}", f"Relação: {self.self_model.relationship}",
-            "Estado interno operacional: " + str(self.state.affect.__dict__),
-            "\nMODELO DA RELAÇÃO:\n" + "\n".join(context["relationship"]),
-            "\nOBJETIVO ATIVO: " + (goal or "nenhum"), "\nINICIATIVA PROPOSTA: " + (initiative or "nenhuma"),
-            "\nMEMÓRIA RECENTE:\n" + "\n".join(context["memory"]),
-            "\nMEMÓRIA ASSOCIATIVA/EPISÓDICA:\n" + "\n".join(context["episodes"]),
-            "\nCRENÇAS/FACTOS CONSOLIDADOS:\n" + "\n".join(context["beliefs"]),
-            "\nMODELO DO MUNDO:\n" + "\n".join(context["world"]),
-            "\nCONHECIMENTO LOCAL:\n" + "\n".join(f"- {x}" for x in context["knowledge"]),
-            "\nENTRADA ATUAL:\n" + user_text,
-            "\nResponda como Noémia: mantenha continuidade, diferencie facto, memória, inferência e hipótese. Nunca invente memória nem trate uma proposta de ação como ação executada.",
+            "IDENTIDADE OPERACIONAL:", f"Nome: {self.self_model.name}", f"Relação: {self.self_model.relationship}", "Estado interno operacional: " + str(self.state.affect.__dict__),
+            "\nMODELO DA RELAÇÃO:\n" + "\n".join(context["relationship"]), "\nOBJETIVO ATIVO: " + (goal or "nenhum"), "\nINICIATIVA PROPOSTA: " + (initiative or "nenhuma"),
+            "\nMEMÓRIA RECENTE:\n" + "\n".join(context["memory"]), "\nMEMÓRIA ASSOCIATIVA/EPISÓDICA:\n" + "\n".join(context["episodes"]),
+            "\nCRENÇAS/FACTOS CONSOLIDADOS:\n" + "\n".join(context["beliefs"]), "\nMODELO DO MUNDO:\n" + "\n".join(context["world"]),
+            "\nLINHA TEMPORAL RECENTE:\n" + "\n".join(context["temporal"]), "\nMUDANÇAS DE ESTADO:\n" + "\n".join(context["changes"]),
+            "\nCONHECIMENTO LOCAL:\n" + "\n".join(f"- {x}" for x in context["knowledge"]), "\nENTRADA ATUAL:\n" + user_text,
+            "\nResponda como Noémia: mantenha continuidade; diferencie facto, memória, inferência e hipótese. Use mudanças de estado como histórico, não como certeza de causa ou permanência. Nunca invente memória nem trate uma proposta de ação como ação executada.",
         ])
 
     def snapshot(self) -> dict:
         return {
-            "state": self.state.to_dict(), "self": self.self_model.describe(), "world": self.world.to_dict(),
-            "relationship": self.relationship.snapshot(),
-            "goals": [g.__dict__.copy() for g in self.goals.goals.values()],
-            "episodic_memory": self.episodic.to_dict(), "semantic_memory": self.semantic.to_dict(),
-            "associative_memory": self.associations.snapshot(),
+            "state": self.state.to_dict(), "self": self.self_model.describe(), "world": self.world.to_dict(), "relationship": self.relationship.snapshot(),
+            "goals": [g.__dict__.copy() for g in self.goals.goals.values()], "episodic_memory": self.episodic.to_dict(), "semantic_memory": self.semantic.to_dict(),
+            "associative_memory": self.associations.snapshot(), "temporal_memory": self.timeline.snapshot(), "state_history": self.state_history.snapshot(),
             "plans": {goal_id: {"goal_id": plan.goal_id, "confidence": plan.confidence, "steps": [step.__dict__.copy() for step in plan.steps]} for goal_id, plan in self.agency.plans.items()},
             "initiative": {"enabled": self.initiative.policy.enabled, "pending": [item.__dict__.copy() for item in self.initiative.pending]},
             "capabilities": {name: capability.__dict__.copy() for name, capability in self.agency.capabilities.items()},
