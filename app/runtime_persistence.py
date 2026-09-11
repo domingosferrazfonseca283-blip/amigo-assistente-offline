@@ -11,9 +11,12 @@ def restore_runtime_core(runtime: Any, snapshot: dict[str, Any]) -> None:
     """
     from .cognitive_state import NoemiaState
     from .noemia_being import NoemiaBeing
+    from .world_model import WorldModel
 
     runtime.state = NoemiaState.from_dict(dict(snapshot.get("state", {})))
     runtime.being = NoemiaBeing.restore(dict(snapshot.get("being", {})))
+    runtime.world = WorldModel.from_dict(list(snapshot.get("world", [])))
+    runtime.relationship.restore(snapshot.get("relationship"))
     runtime.affect.state = runtime.state.affect
 
     goals = snapshot.get("goals", [])
