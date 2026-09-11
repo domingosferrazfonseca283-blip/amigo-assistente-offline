@@ -13,9 +13,10 @@ from .event_bus import EventBus
 from .goals import GoalManager
 from .initiative import InitiativeEngine, InitiativePolicy
 from .memory import LocalMemory
-from .memory_association import AssociativeMemory
+from .memory_association import AssociativeMemory, MemoryNode
 from .memory_context import MemoryContext
 from .memory_retrieval import CognitiveMemoryRetriever
+from .relationship_model import RelationshipModel
 from .semantic_memory import SemanticMemory
 from .self_model import SelfModel
 from .world_model import WorldModel
@@ -48,6 +49,7 @@ class CognitiveRuntime:
         self.semantic = SemanticMemory()
         self.associations = AssociativeMemory()
         self.memory_retriever = CognitiveMemoryRetriever(self.episodic, self.semantic, self.associations)
+        self.relationship = RelationshipModel()
         self.agency = AgencyEngine()
         self._register_internal_capabilities()
         self.initiative = InitiativeEngine(self.goals, self.agency, InitiativePolicy())
@@ -72,7 +74,6 @@ class CognitiveRuntime:
         self.state.touch()
         self.state.turn_count += 1
         self.affect.on_input(text)
-        self.world.remember_user_statement(text)
         episode = self.episodic.record(
             "Interação recebida: " + text,
             {"event_id": event.id, "role": "user"},
@@ -80,11 +81,17 @@ class CognitiveRuntime:
             emotional_salience=self.state.affect.novelty,
             source="perception",
         )
-        self.associations.add_node(__import__("app.memory_association", fromlist=["MemoryNode"]).MemoryNode(
-            episode.id, "episode", episode.summary, episode.salience,
-        ))
+        self.associations.add_node(MemoryNode(episode.id, "episode", episode.summary, episode.salience))
+        topics = self._extract_topics(text)
+        self.relationship.observe(text, topics=topics, important=event.importance >= 0.9, episode_id=episode.id)
+        self.world.observe_user_statement(text, confidence=0.95)
         self.state.working_memory.append({"type": "user", "text": text, "event_id": event.id})
         self.state.working_memory = self.state.working_memory[-24:]
+
+    @staticmethod
+    def _extract_topics(text: str) -> list[str]:
+        words = [word.strip(".,!?;:()[]{}\"'").lower() for word in text.split()]
+        return list(dict.fromkeys(word for word in words if len(word) >= 5))[:8]
 
     def create_goal(self, title: str, priority: float = 0.5, source: str = "user"):
         goal = self.goals.add(title, priority, source)
@@ -110,7 +117,7 @@ class CognitiveRuntime:
         from .memory_consolidation import MemoryConsolidator
         graph_report = MemoryConsolidator().consolidate(self.episodic, self.semantic, self.associations)
         self.state.reflections.append(
-            f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações"
+            f"Consolidação: {report.reflections} reflexões, {report.adjusted_beliefs} ajustes; rede: {graph_report.nodes_created} nós, {graph_report.links_created} ligações; padrões: {graph_report.patterns_found}"
         )
         self.state.reflections = self.state.reflections[-100:]
         return report
@@ -142,6 +149,7 @@ class CognitiveRuntime:
         self.memory.add("user", user_text)
         self.memory.add("assistant", response)
         self.episodic.record("Resposta e experiência de interação", {"input": user_text, "output": response, "success": True}, importance=0.65, emotional_salience=self.state.affect.novelty, source="runtime")
+        self.relationship.observe(user_text, topics=self._extract_topics(user_text))
         self.state.working_memory.append({"type": "assistant", "text": response})
         self.state.working_memory = self.state.working_memory[-24:]
         self.bus.publish(CognitiveEvent(EventType.MODEL_RESPONSE, {"text": response}, source="local_model", importance=0.7))
@@ -150,9 +158,9 @@ class CognitiveRuntime:
 
     def _retrieve_context(self, query: str) -> dict[str, list[str]]:
         memories = self.memory.recent(limit=16)
-        matches = self.memory_retriever.retrieve(query, MemoryContext(topics=[query]), limit=10)
-        episodes = [f"{m.item.summary} (score={m.score:.2f}; {', '.join(m.reasons)})" for m in matches if m.kind == "episode"]
-        beliefs = [f"{m.item.subject} | {m.item.predicate} | {m.item.value} (score={m.score:.2f}; confiança={m.item.confidence:.2f})" for m in matches if m.kind == "belief"]
+        matches = self.memory_retriever.retrieve(query, MemoryContext(topics=self._extract_topics(query)), limit=10)
+        episodes = [f"{m.item.summary}" for m in matches if m.kind == "episode"]
+        beliefs = [f"{m.item.subject} | {m.item.predicate} | {m.item.value} (confiança={m.item.confidence:.2f})" for m in matches if m.kind == "belief"]
         world = [f"{f.subject} | {f.predicate} | {f.value} (confiança={f.confidence:.2f})" for f in self.world.relevant(query)]
         knowledge: list[str] = []
         if self.knowledge is not None:
@@ -160,12 +168,18 @@ class CognitiveRuntime:
                 knowledge = self.knowledge.search(query, limit=8)
             except Exception:
                 knowledge = []
-        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge}
+        relationship = [
+            f"familiaridade={self.relationship.relationship.familiarity:.2f}",
+            f"continuidade={self.relationship.relationship.continuity_score:.2f}",
+            "tópicos partilhados=" + ", ".join(sorted(self.relationship.relationship.shared_topics, key=self.relationship.relationship.shared_topics.get, reverse=True)[:8]),
+        ]
+        return {"memory": [f"{m['role']}: {m['content']}" for m in memories], "episodes": episodes, "beliefs": beliefs, "world": world, "knowledge": knowledge, "relationship": relationship}
 
     def _compose_context(self, user_text: str, context: dict[str, list[str]], goal: str | None, initiative: str | None = None) -> str:
         return "\n".join([
             "IDENTIDADE OPERACIONAL:", f"Nome: {self.self_model.name}", f"Relação: {self.self_model.relationship}",
             "Estado interno operacional: " + str(self.state.affect.__dict__),
+            "\nMODELO DA RELAÇÃO:\n" + "\n".join(context["relationship"]),
             "\nOBJETIVO ATIVO: " + (goal or "nenhum"), "\nINICIATIVA PROPOSTA: " + (initiative or "nenhuma"),
             "\nMEMÓRIA RECENTE:\n" + "\n".join(context["memory"]),
             "\nMEMÓRIA ASSOCIATIVA/EPISÓDICA:\n" + "\n".join(context["episodes"]),
@@ -179,6 +193,7 @@ class CognitiveRuntime:
     def snapshot(self) -> dict:
         return {
             "state": self.state.to_dict(), "self": self.self_model.describe(), "world": self.world.to_dict(),
+            "relationship": self.relationship.snapshot(),
             "goals": [g.__dict__.copy() for g in self.goals.goals.values()],
             "episodic_memory": self.episodic.to_dict(), "semantic_memory": self.semantic.to_dict(),
             "associative_memory": self.associations.snapshot(),
