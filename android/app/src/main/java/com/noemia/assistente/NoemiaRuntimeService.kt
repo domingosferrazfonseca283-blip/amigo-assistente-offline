@@ -5,15 +5,16 @@ import android.content.Intent
 import android.os.IBinder
 import org.json.JSONObject
 
-/** Corpo Android: mantém o núcleo vivo e restaura a memória local. */
+/** Corpo Android: hospeda o núcleo cognitivo local e persiste o seu estado. */
 class NoemiaRuntimeService : Service() {
     private lateinit var coordinator: RuntimeCoordinator
     private lateinit var internalScheduler: InternalCognitionScheduler
 
     override fun onCreate() {
         super.onCreate()
-        val memory = LongTermMemoryStore(applicationContext)
-        coordinator = RuntimeCoordinator(applicationContext, MemoryAwareBridge(memory))
+        // O caminho oficial é o núcleo compilado no próprio APK: sem sockets,
+        // sem HTTP e sem depender de um serviço remoto.
+        coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge())
         coordinator.start()
         internalScheduler = InternalCognitionScheduler {
             coordinator.internalCycle("reflect")
