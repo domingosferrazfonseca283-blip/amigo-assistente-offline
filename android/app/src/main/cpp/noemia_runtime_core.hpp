@@ -4,7 +4,7 @@
 
 namespace noemia {
 
-// Núcleo mínimo de execução nativa: mantém estado de sessão sem rede.
+// Estado mínimo persistente do ser digital. Não representa consciência humana.
 class RuntimeCore {
 public:
     RuntimeCore();
@@ -13,7 +13,10 @@ public:
 private:
     long long turn_count_ = 0;
     long long internal_cycle_count_ = 0;
+    long long experience_count_ = 0;
     std::string last_input_;
+    std::string last_activity_ = "resting";
+    std::string affect_state_ = "calm";
 };
 
 } // namespace noemia
