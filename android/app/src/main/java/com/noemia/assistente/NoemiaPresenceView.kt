@@ -71,7 +71,19 @@ class NoemiaPresenceView(context: Context) : View(context) {
         val cy = height * 0.54f
         val radius = min(width, height) * 0.235f
         val time = (System.nanoTime() - startedAt) / 1_000_000_000.0
-        val breath = (sin(time * 1.35) * 0.012f).toFloat()
+        val breathSpeed = when (phase) {
+            "perceiving" -> 1.65
+            "expressing" -> 1.9
+            "reflecting" -> 0.72
+            else -> 1.15
+        }
+        val breathAmount = when (phase) {
+            "expressing" -> 0.022f
+            "perceiving" -> 0.016f
+            "reflecting" -> 0.009f
+            else -> 0.012f
+        }
+        val breath = (sin(time * breathSpeed) * breathAmount).toFloat()
         val r = radius * (1f + breath)
 
         drawAura(canvas, cx, cy, r)
@@ -126,16 +138,21 @@ class NoemiaPresenceView(context: Context) : View(context) {
         val eyeR = r * 0.23f
         val blink = blinkAmount(time)
         val gaze = when (phase) {
-            "perceiving", "expressing" -> 0.025f
+            "perceiving", "expressing" -> 0.025f + connection * 0.018f
             "reflecting" -> -0.018f
             else -> 0f
         }
+        val gazeVertical = when (phase) {
+            "reflecting" -> -0.018f
+            "perceiving" -> -0.006f
+            else -> 0f
+        }
 
-        drawEye(canvas, cx - eyeSpacing, eyeY, eyeR, blink, gaze, time)
-        drawEye(canvas, cx + eyeSpacing, eyeY, eyeR, blink, gaze, time + 0.17)
+        drawEye(canvas, cx - eyeSpacing, eyeY, eyeR, blink, gaze, gazeVertical, time)
+        drawEye(canvas, cx + eyeSpacing, eyeY, eyeR, blink, gaze, gazeVertical, time + 0.17)
     }
 
-    private fun drawEye(canvas: Canvas, cx: Float, cy: Float, r: Float, blink: Float, gaze: Float, time: Double) {
+    private fun drawEye(canvas: Canvas, cx: Float, cy: Float, r: Float, blink: Float, gaze: Float, gazeVertical: Float, time: Double) {
         val height = r * (1f - blink)
         if (height < 2f) return
 
@@ -152,7 +169,7 @@ class NoemiaPresenceView(context: Context) : View(context) {
         paint.shader = null
 
         val pupilX = cx + gaze * r + (sin(time * 0.8) * r * 0.025).toFloat()
-        val pupilY = cy + (cos(time * 0.65) * r * 0.012).toFloat()
+        val pupilY = cy + gazeVertical * r + (cos(time * 0.65) * r * 0.012).toFloat()
         paint.color = 0xFF00030A.toInt()
         canvas.drawCircle(pupilX, pupilY, r * 0.55f, paint)
         paint.color = 0xFFFFFFFF.toInt()
