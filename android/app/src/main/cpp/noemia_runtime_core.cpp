@@ -106,7 +106,7 @@ std::string RuntimeCore::execute(const std::string& request_json) {
         out << ",\"needs\":{"connection\":" << connection_;
         out << ",\"curiosity\":" << curiosity_ << ",\"novelty\":" << novelty_;
         out << ",\"reflection\":" << reflection_ << ",\"rest\":" << rest_ << "}";
-        out << "}}},\"error\":null,\"request_id\":\"" << json_escape(request_id) << "\"}";
+        out << "}},\"error\":null,\"request_id\":\"" << json_escape(request_id) << "\"}";
         return out.str();
     }
 
