@@ -8,7 +8,8 @@ import org.json.JSONObject
  * implementação interna da mente local.
  */
 class ProtocolCognitiveBridge(
-    private val transport: LocalRuntimeTransport
+    private val transport: LocalRuntimeTransport,
+    private val onDeviceModel: NoemiaOnDeviceModel? = null,
 ) : CognitiveBridge {
 
     override fun restore(snapshot: JSONObject?) {
@@ -36,16 +37,29 @@ class ProtocolCognitiveBridge(
     }
 
     override fun converse(text: String): String {
-        val response = transport.execute(
+        val state = transport.execute(
             RuntimeRequest(
                 RuntimeCommands.THINK,
                 JSONObject().put("text", text)
             )
         )
-        if (!response.ok) {
-            throw IllegalStateException(response.error ?: "Falha no núcleo cognitivo local")
+        if (!state.ok) {
+            throw IllegalStateException(state.error ?: "Falha no núcleo cognitivo local")
         }
-        return response.payload.optString("text", "")
+
+        val model = onDeviceModel
+        if (model != null) {
+            try {
+                val prompt = buildModelPrompt(text, state.payload)
+                val generated = model.generate(prompt)
+                if (generated.isNotBlank()) return generated
+            } catch (_: Exception) {
+                // O núcleo continua funcional quando o modelo de dispositivo
+                // não está disponível neste hardware/configuração.
+            }
+        }
+
+        return state.payload.optString("text", "")
     }
 
     override fun internalCycle(activity: String): JSONObject {
@@ -56,7 +70,7 @@ class ProtocolCognitiveBridge(
             )
         )
         if (!response.ok) {
-            throw IllegalStateException(response.error ?: "Falha no ciclo cognitivo interno")
+            throw IllegalStateException(response.error ?: "Falha no ciclo cognitivo local")
         }
         return response.payload
     }
@@ -67,5 +81,22 @@ class ProtocolCognitiveBridge(
             throw IllegalStateException(response.error ?: "Falha ao obter snapshot")
         }
         return response.payload
+    }
+
+    private fun buildModelPrompt(text: String, state: JSONObject): String {
+        val affect = state.optString("affect_state", "calma")
+        val focus = state.optString("current_focus", "")
+        return """
+            Você é a inteligência local de Noémia.
+            Noémia é uma entidade artificial persistente; o modelo é apenas um componente da sua inteligência.
+            Responda em português natural, com clareza e sem inventar memórias, perceções ou capacidades.
+            Não diga que tem consciência biológica ou emoções reais.
+
+            Estado funcional atual: $affect.
+            Foco funcional: $focus.
+
+            Mensagem do utilizador:
+            $text
+        """.trimIndent()
     }
 }
