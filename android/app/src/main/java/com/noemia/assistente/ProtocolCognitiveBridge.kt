@@ -24,11 +24,15 @@ class ProtocolCognitiveBridge(
         }
     }
 
-    override fun perceive(kind: String, payload: JSONObject) {
+    override fun perceive(kind: String, payload: JSONObject): JSONObject {
         val enriched = JSONObject(payload.toString()).put("kind", kind)
-        transport.execute(
+        val response = transport.execute(
             RuntimeRequest(RuntimeCommands.PERCEIVE, enriched)
         )
+        if (!response.ok) {
+            throw IllegalStateException(response.error ?: "Falha ao processar percepção local")
+        }
+        return response.payload
     }
 
     override fun converse(text: String): String {
@@ -44,7 +48,7 @@ class ProtocolCognitiveBridge(
         return response.payload.optString("text", "")
     }
 
-    override fun internalCycle(activity: String) {
+    override fun internalCycle(activity: String): JSONObject {
         val response = transport.execute(
             RuntimeRequest(
                 RuntimeCommands.INTERNAL_CYCLE,
@@ -54,6 +58,7 @@ class ProtocolCognitiveBridge(
         if (!response.ok) {
             throw IllegalStateException(response.error ?: "Falha no ciclo cognitivo interno")
         }
+        return response.payload
     }
 
     override fun snapshot(): JSONObject {
