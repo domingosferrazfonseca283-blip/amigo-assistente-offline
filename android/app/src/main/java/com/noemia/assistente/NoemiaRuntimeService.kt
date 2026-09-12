@@ -21,12 +21,14 @@ class NoemiaRuntimeService : Service() {
     private lateinit var camera: AndroidCamera
     private lateinit var speechRecognizer: NoemiaSpeechRecognizer
     private lateinit var visionAnalyzer: NoemiaVisionAnalyzer
+    private lateinit var onDeviceModel: NoemiaOnDeviceModel
 
     override fun onCreate() {
         super.onCreate()
         startForegroundRuntime()
         voiceOutput = NoemiaVoiceOutput(applicationContext)
-        coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge()) { action, payload ->
+        onDeviceModel = RuntimeHost.createOnDeviceModel()
+        coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge(onDeviceModel)) { action, payload ->
             when (action) {
                 "speak" -> if (payload.isNotBlank()) voiceOutput.speak(payload)
                 "vibrate" -> payload.toLongOrNull()?.let(::vibrate)
@@ -42,7 +44,7 @@ class NoemiaRuntimeService : Service() {
         }
         bodySensors = AndroidBodySensors(applicationContext, perceive)
         microphone = AndroidMicrophone(applicationContext, perceive)
-        camera = AndroidCamera(applicationContext, perceive)
+        camera = AndroidCamera(applicationContext, perceive, onDeviceModel)
         speechRecognizer = NoemiaSpeechRecognizer(applicationContext) { kind, payload ->
             perceive(kind, payload)
             if (kind == "speech.final") {
@@ -83,6 +85,7 @@ class NoemiaRuntimeService : Service() {
         internalScheduler.stop()
         voiceOutput.shutdown()
         coordinator.persist()
+        onDeviceModel.close()
         super.onDestroy()
     }
 
