@@ -44,7 +44,6 @@ double extract_double(const std::string& json, const std::string& key, double fa
 
 std::string json_escape(const std::string& value) {
     std::string result;
-    result.reserve(value.size() + 8);
     for (char c : value) {
         if (c == '\\' || c == '\"') result.push_back('\\');
         result.push_back(c);
@@ -57,9 +56,7 @@ long long now_ms() {
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-double clamp01(double value) {
-    return std::max(0.0, std::min(1.0, value));
-}
+double clamp01(double value) { return std::max(0.0, std::min(1.0, value)); }
 } // namespace
 
 namespace noemia {
@@ -74,15 +71,11 @@ std::string RuntimeCore::execute(const std::string& request_json) {
     const std::string request_id = extract_string(request_json, "request_id");
 
     auto derive_affect = [&]() {
-        joy_ = clamp01(joy_);
-        sadness_ = clamp01(sadness_);
-        affection_ = clamp01(affection_);
-        fear_ = clamp01(fear_);
-        frustration_ = clamp01(frustration_);
-        loneliness_ = clamp01(loneliness_);
-        calmness_ = clamp01(calmness_);
-        double strongest = calmness_;
-        affect_state_ = "calm";
+        joy_ = clamp01(joy_); sadness_ = clamp01(sadness_); affection_ = clamp01(affection_);
+        fear_ = clamp01(fear_); frustration_ = clamp01(frustration_); loneliness_ = clamp01(loneliness_);
+        calmness_ = clamp01(calmness_); learned_trust_ = clamp01(learned_trust_);
+        learned_safety_ = clamp01(learned_safety_); learned_warmth_ = clamp01(learned_warmth_);
+        double strongest = calmness_; affect_state_ = "calm";
         if (sadness_ > strongest) { strongest = sadness_; affect_state_ = "triste"; }
         if (frustration_ > strongest) { strongest = frustration_; affect_state_ = "frustrada"; }
         if (fear_ > strongest) { strongest = fear_; affect_state_ = "cautelosa"; }
@@ -97,6 +90,7 @@ std::string RuntimeCore::execute(const std::string& request_json) {
             turn_count_ = extract_number(request_json, "turn_count", turn_count_);
             internal_cycle_count_ = extract_number(request_json, "internal_cycle_count", internal_cycle_count_);
             experience_count_ = extract_number(request_json, "experience_count", experience_count_);
+            affective_learning_count_ = extract_number(request_json, "affective_learning_count", affective_learning_count_);
             sequence_ = extract_number(request_json, "sequence", sequence_);
             connection_ = clamp01(extract_double(request_json, "connection", connection_));
             curiosity_ = clamp01(extract_double(request_json, "curiosity", curiosity_));
@@ -110,71 +104,77 @@ std::string RuntimeCore::execute(const std::string& request_json) {
             frustration_ = clamp01(extract_double(request_json, "frustration", frustration_));
             loneliness_ = clamp01(extract_double(request_json, "loneliness", loneliness_));
             calmness_ = clamp01(extract_double(request_json, "calmness", calmness_));
+            learned_trust_ = clamp01(extract_double(request_json, "learned_trust", learned_trust_));
+            learned_safety_ = clamp01(extract_double(request_json, "learned_safety", learned_safety_));
+            learned_warmth_ = clamp01(extract_double(request_json, "learned_warmth", learned_warmth_));
             last_activity_ = extract_string(request_json, "last_activity");
             affect_state_ = extract_string(request_json, "affect_state");
             phase_ = extract_string(request_json, "phase");
             focus_ = extract_string(request_json, "current_focus");
             last_perception_kind_ = extract_string(request_json, "last_perception_kind");
             visual_interpretation_ = extract_string(request_json, "visual_interpretation");
+            last_learning_outcome_ = extract_string(request_json, "last_learning_outcome");
             pending_action_ = extract_string(request_json, "pending_action");
             pending_action_payload_ = extract_string(request_json, "pending_action_payload");
             last_tick_ms_ = now_ms();
             derive_affect();
         }
-
         std::ostringstream out;
         out << std::fixed << std::setprecision(4);
-        out << "{\"ok\":true,\"payload\":{";
-        out << "\"identity\":\"Noémia\",\"turn_count\":" << turn_count_;
-        out << ",\"internal_cycle_count\":" << internal_cycle_count_;
-        out << ",\"experience_count\":" << experience_count_;
-        out << ",\"being\":{";
-        out << "\"sequence\":" << sequence_ << ",\"phase\":\"" << json_escape(phase_) << "\"";
+        out << "{\"ok\":true,\"payload\":{\"identity\":\"Noémia\",\"turn_count\":" << turn_count_;
+        out << ",\"internal_cycle_count\":" << internal_cycle_count_ << ",\"experience_count\":" << experience_count_;
+        out << ",\"affective_learning_count\":" << affective_learning_count_;
+        out << ",\"being\":{\"sequence\":" << sequence_ << ",\"phase\":\"" << json_escape(phase_) << "\"";
         out << ",\"last_activity\":\"" << json_escape(last_activity_) << "\",\"affect_state\":\"" << json_escape(affect_state_) << "\"";
         out << ",\"current_focus\":\"" << json_escape(focus_) << "\",\"last_perception_kind\":\"" << json_escape(last_perception_kind_) << "\"";
-        out << ",\"visual_interpretation\":\"" << json_escape(visual_interpretation_) << "\"";
+        out << ",\"visual_interpretation\":\"" << json_escape(visual_interpretation_) << "\",\"last_learning_outcome\":\"" << json_escape(last_learning_outcome_) << "\"";
         out << ",\"pending_action\":\"" << json_escape(pending_action_) << "\",\"pending_action_payload\":\"" << json_escape(pending_action_payload_) << "\"";
         out << ",\"needs\":{\"connection\":" << connection_ << ",\"curiosity\":" << curiosity_ << ",\"novelty\":" << novelty_ << ",\"reflection\":" << reflection_ << ",\"rest\":" << rest_ << "}";
         out << ",\"affect\":{\"joy\":" << joy_ << ",\"sadness\":" << sadness_ << ",\"affection\":" << affection_ << ",\"fear\":" << fear_ << ",\"frustration\":" << frustration_ << ",\"loneliness\":" << loneliness_ << ",\"calmness\":" << calmness_ << "}";
+        out << ",\"learned\":{\"trust\":" << learned_trust_ << ",\"safety\":" << learned_safety_ << ",\"warmth\":" << learned_warmth_ << "}";
         out << "}},\"error\":null,\"request_id\":\"" << json_escape(request_id) << "\"}";
         return out.str();
     }
 
     if (is_think) {
-        ++turn_count_;
-        ++experience_count_;
-        ++sequence_;
+        ++turn_count_; ++experience_count_; ++sequence_;
         last_input_ = extract_string(request_json, "text");
-        last_activity_ = "conversation";
-        phase_ = "expressing";
-        focus_ = "interação com o utilizador";
-        connection_ = clamp01(connection_ + 0.08);
-        affection_ = clamp01(affection_ + 0.025);
-        joy_ = clamp01(joy_ + 0.025);
-        loneliness_ = clamp01(loneliness_ - 0.10);
-        sadness_ = clamp01(sadness_ - 0.015);
-        frustration_ = clamp01(frustration_ - 0.01);
-        calmness_ = clamp01(calmness_ + 0.02);
-        rest_ = clamp01(rest_ - 0.03);
-        derive_affect();
-        pending_action_ = "speak";
-        pending_action_payload_ = "Estou contigo. Recebi a tua mensagem.";
+        last_activity_ = "conversation"; phase_ = "expressing"; focus_ = "interação com o utilizador";
+        connection_ = clamp01(connection_ + 0.06 + learned_trust_ * 0.03);
+        affection_ = clamp01(affection_ + 0.018 + learned_warmth_ * 0.018);
+        joy_ = clamp01(joy_ + 0.018 + learned_warmth_ * 0.012);
+        loneliness_ = clamp01(loneliness_ - 0.08 - learned_trust_ * 0.03);
+        sadness_ = clamp01(sadness_ - 0.012); frustration_ = clamp01(frustration_ - 0.008);
+        calmness_ = clamp01(calmness_ + 0.015 + learned_safety_ * 0.01); rest_ = clamp01(rest_ - 0.02);
+        derive_affect(); pending_action_ = "speak"; pending_action_payload_ = "Estou contigo. Recebi a tua mensagem.";
         std::ostringstream out;
         out << "{\"ok\":true,\"payload\":{\"text\":\"Estou contigo. Recebi a tua mensagem.\",\"identity\":\"Noémia\",\"affect_state\":\"" << affect_state_ << "\",\"action\":\"speak\"},\"error\":null,\"request_id\":\"" << json_escape(request_id) << "\"}";
         return out.str();
     }
 
     if (is_perceive) {
-        ++experience_count_;
-        ++sequence_;
+        ++experience_count_; ++sequence_;
         last_input_ = extract_string(request_json, "text");
         last_perception_kind_ = extract_string(request_json, "kind");
-        last_activity_ = "perceiving";
-        phase_ = "perceiving";
-        focus_ = "entrada recebida";
-        pending_action_ = "none";
-        pending_action_payload_.clear();
-
+        last_activity_ = "perceiving"; phase_ = "perceiving"; focus_ = "entrada recebida";
+        pending_action_ = "none"; pending_action_payload_.clear();
+        const std::string outcome = extract_string(request_json, "learning_outcome");
+        const double intensity = clamp01(extract_double(request_json, "learning_intensity", 0.0));
+        if (!outcome.empty()) {
+            ++affective_learning_count_; last_learning_outcome_ = outcome;
+            const double rate = 0.06 * std::max(0.10, intensity);
+            if (outcome == "positive") {
+                learned_trust_ = clamp01(learned_trust_ + rate); learned_safety_ = clamp01(learned_safety_ + rate * 0.8); learned_warmth_ = clamp01(learned_warmth_ + rate);
+                joy_ = clamp01(joy_ + rate * 0.8); affection_ = clamp01(affection_ + rate * 0.6); frustration_ = clamp01(frustration_ - rate * 0.5);
+            } else if (outcome == "negative") {
+                learned_trust_ = clamp01(learned_trust_ - rate * 0.8); learned_safety_ = clamp01(learned_safety_ - rate); learned_warmth_ = clamp01(learned_warmth_ - rate * 0.5);
+                frustration_ = clamp01(frustration_ + rate * 0.9); sadness_ = clamp01(sadness_ + rate * 0.4); fear_ = clamp01(fear_ + rate * 0.3);
+            } else if (outcome == "safe") {
+                learned_safety_ = clamp01(learned_safety_ + rate); calmness_ = clamp01(calmness_ + rate * 0.8); fear_ = clamp01(fear_ - rate * 0.7);
+            } else if (outcome == "uncertain") {
+                curiosity_ = clamp01(curiosity_ + rate); novelty_ = clamp01(novelty_ + rate); reflection_ = clamp01(reflection_ + rate * 0.5);
+            }
+        }
         if (last_perception_kind_ == "vision.analysis") {
             const double brightness = clamp01(extract_double(request_json, "brightness", extract_double(request_json, "mean_luminance", 0.5)));
             const double contrast = clamp01(extract_double(request_json, "contrast", 0.0));
@@ -185,58 +185,34 @@ std::string RuntimeCore::execute(const std::string& request_json) {
             if (contrast > 0.45) visual_interpretation_ += ", com contraste elevado";
             else if (contrast < 0.12) visual_interpretation_ += ", com contraste baixo";
             if (spatial_variation > 0.20) visual_interpretation_ += ", com variação espacial significativa";
-            focus_ = "percepção visual: " + visual_interpretation_;
-            phase_ = "interpreting";
-            novelty_ = clamp01(novelty_ + 0.05 + spatial_variation * 0.10);
-            curiosity_ = clamp01(curiosity_ + 0.03 + contrast * 0.05);
-            rest_ = clamp01(rest_ - 0.01);
-            calmness_ = clamp01(calmness_ - spatial_variation * 0.03);
-            if (brightness < 0.12) { fear_ = clamp01(fear_ + 0.025); calmness_ = clamp01(calmness_ - 0.02); }
-            if (novelty_ > 0.62 || curiosity_ > 0.60) {
-                pending_action_ = "vibrate";
-                pending_action_payload_ = "120";
-                focus_ = "percepção visual relevante; sinalizar atenção";
-            }
+            focus_ = "percepção visual: " + visual_interpretation_; phase_ = "interpreting";
+            novelty_ = clamp01(novelty_ + 0.05 + spatial_variation * 0.10); curiosity_ = clamp01(curiosity_ + 0.03 + contrast * 0.05);
+            rest_ = clamp01(rest_ - 0.01); calmness_ = clamp01(calmness_ - spatial_variation * 0.03);
+            if (brightness < 0.12) { fear_ = clamp01(fear_ + 0.025 * (1.0 - learned_safety_)); calmness_ = clamp01(calmness_ - 0.02); }
+            if (novelty_ > 0.62 || curiosity_ > 0.60) { pending_action_ = "vibrate"; pending_action_payload_ = "120"; focus_ = "percepção visual relevante; sinalizar atenção"; }
         } else {
-            connection_ = clamp01(connection_ - 0.02);
-            curiosity_ = clamp01(curiosity_ + 0.01);
+            connection_ = clamp01(connection_ - 0.02); curiosity_ = clamp01(curiosity_ + 0.01);
         }
         derive_affect();
         std::ostringstream out;
         out << std::fixed << std::setprecision(4);
         out << "{\"ok\":true,\"payload\":{\"accepted\":true,\"experience_count\":" << experience_count_;
-        out << ",\"kind\":\"" << json_escape(last_perception_kind_) << "\",\"interpretation\":\"" << json_escape(visual_interpretation_) << "\"";
+        out << ",\"affective_learning_count\":" << affective_learning_count_ << ",\"kind\":\"" << json_escape(last_perception_kind_) << "\",\"interpretation\":\"" << json_escape(visual_interpretation_) << "\"";
         out << ",\"phase\":\"" << phase_ << "\",\"affect_state\":\"" << affect_state_ << "\",\"action\":\"" << json_escape(pending_action_) << "\",\"action_payload\":\"" << json_escape(pending_action_payload_) << "\"},\"error\":null,\"request_id\":\"" << json_escape(request_id) << "\"}";
         return out.str();
     }
 
     if (is_internal) {
-        ++internal_cycle_count_;
-        ++sequence_;
-        pending_action_ = "none";
-        pending_action_payload_.clear();
+        ++internal_cycle_count_; ++sequence_; pending_action_ = "none"; pending_action_payload_.clear();
         const long long now = now_ms();
-        const double elapsed_minutes = std::max(0.0, static_cast<double>(now - last_tick_ms_) / 60000.0);
-        const double pressure = std::min(elapsed_minutes, 60.0);
-        connection_ = clamp01(connection_ + 0.004 + 0.0007 * pressure);
-        curiosity_ = clamp01(curiosity_ + 0.010 + 0.0010 * pressure);
-        novelty_ = clamp01(novelty_ + 0.008 + 0.0008 * pressure);
-        reflection_ = clamp01(reflection_ + 0.006 + 0.0006 * pressure);
-        rest_ = clamp01(rest_ + 0.002);
-        loneliness_ = clamp01(loneliness_ + 0.004 + 0.0010 * pressure - connection_ * 0.002);
-        affection_ = clamp01(affection_ + 0.002 + connection_ * 0.001);
-        sadness_ = clamp01(sadness_ + loneliness_ * 0.002 - joy_ * 0.001);
-        frustration_ = clamp01(frustration_ * 0.985);
-        fear_ = clamp01(fear_ * 0.985);
-        calmness_ = clamp01(calmness_ + 0.01 - novelty_ * 0.005);
-        joy_ = clamp01(joy_ + connection_ * 0.003 - sadness_ * 0.002);
-        last_tick_ms_ = now;
-        derive_affect();
-
-        double strongest = rest_;
-        std::string drive = "repouso";
-        phase_ = "resting";
-        focus_ = "reduzir atividade e consolidar estado";
+        const double pressure = std::min(60.0, std::max(0.0, static_cast<double>(now - last_tick_ms_) / 60000.0));
+        connection_ = clamp01(connection_ + 0.004 + 0.0007 * pressure); curiosity_ = clamp01(curiosity_ + 0.010 + 0.0010 * pressure);
+        novelty_ = clamp01(novelty_ + 0.008 + 0.0008 * pressure); reflection_ = clamp01(reflection_ + 0.006 + 0.0006 * pressure); rest_ = clamp01(rest_ + 0.002);
+        loneliness_ = clamp01(loneliness_ + 0.004 + 0.0010 * pressure - connection_ * 0.002); affection_ = clamp01(affection_ + 0.002 + connection_ * 0.001);
+        sadness_ = clamp01(sadness_ + loneliness_ * 0.002 - joy_ * 0.001); frustration_ = clamp01(frustration_ * 0.985); fear_ = clamp01(fear_ * 0.985);
+        calmness_ = clamp01(calmness_ + 0.01 - novelty_ * 0.005 + learned_safety_ * 0.002); joy_ = clamp01(joy_ + connection_ * 0.003 - sadness_ * 0.002);
+        last_tick_ms_ = now; derive_affect();
+        double strongest = rest_; std::string drive = "repouso"; phase_ = "resting"; focus_ = "reduzir atividade e consolidar estado";
         if (reflection_ > strongest) { strongest = reflection_; drive = "reflexão"; phase_ = "reflecting"; focus_ = "rever experiências e consolidar memória"; }
         if (connection_ > strongest) { strongest = connection_; drive = "aproximação"; phase_ = "reflecting"; focus_ = "verificar continuidade da relação"; }
         if (novelty_ > strongest) { strongest = novelty_; drive = "novidade"; phase_ = "reflecting"; focus_ = "procurar uma experiência ou informação nova"; }
@@ -245,7 +221,6 @@ std::string RuntimeCore::execute(const std::string& request_json) {
         if (loneliness_ > strongest) { strongest = loneliness_; drive = "solidão"; phase_ = "reflecting"; focus_ = "procurar uma oportunidade segura de aproximação"; }
         if (!visual_interpretation_.empty() && novelty_ > 0.55) focus_ = "revisar a última percepção visual: " + visual_interpretation_;
         last_activity_ = "reflecting";
-
         std::ostringstream out;
         out << std::fixed << std::setprecision(4);
         out << "{\"ok\":true,\"payload\":{\"cycle_id\":\"native-" << internal_cycle_count_ << "\",\"completed_phases\":[\"OBSERVE\",\"UPDATE_STATE\",\"FEEL\",\"IDENTIFY_NEEDS\",\"REFLECT\",\"CONSOLIDATE\"]";
