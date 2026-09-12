@@ -27,7 +27,7 @@ class RuntimeCoordinator(
         val enriched = JSONObject(payload.toString())
             .put("history_count", history.size)
             .put("history_conversation_count", history.count { it.kind == "conversation" })
-            .put("history_visual_count", history.count { it.kind == "vision.analysis" })
+            .put("history_visual_count", history.count { it.kind.startsWith("vision.") })
             .put("history_action_count", history.count { it.action != "none" })
             .put("history_vibration_count", history.count { it.action == "vibrate" })
             .put("history_failure_count", history.count { it.summary.contains("falha", ignoreCase = true) || it.summary.contains("erro", ignoreCase = true) })
@@ -35,8 +35,10 @@ class RuntimeCoordinator(
         val action = decision.optString("action", "none")
         val actionPayload = decision.optString("action_payload", "")
         val interpretation = decision.optString("interpretation", "")
+        val semanticDescription = payload.optString("description", "").trim()
         val summary = when {
             interpretation.isNotBlank() -> interpretation
+            semanticDescription.isNotBlank() -> semanticDescription
             payload.optString("text").isNotBlank() -> payload.optString("text")
             else -> "Percepção recebida: $kind"
         }
@@ -89,8 +91,9 @@ class RuntimeCoordinator(
         val outcome = when {
             kind.contains("failure", ignoreCase = true) || kind.contains("error", ignoreCase = true) -> "negative"
             kind == "conversation" && action == "speak" -> "positive"
+            kind == "vision.semantic_error" -> "negative"
             kind == "vision.analysis" && summary.contains("escura", ignoreCase = true) -> "uncertain"
-            kind == "vision.analysis" -> "safe"
+            kind == "vision.analysis" || kind == "vision.semantic" -> "safe"
             kind.startsWith("speech.") -> "positive"
             failures >= 3 -> "negative"
             action != "none" -> "positive"
@@ -100,7 +103,7 @@ class RuntimeCoordinator(
         val intensity = when {
             outcome == "negative" -> 0.80
             kind == "conversation" -> 0.70
-            kind == "vision.analysis" -> 0.45
+            kind.startsWith("vision.") -> 0.45
             else -> 0.35
         }
 
