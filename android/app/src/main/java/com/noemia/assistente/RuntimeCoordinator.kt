@@ -4,10 +4,8 @@ import android.content.Context
 import org.json.JSONObject
 
 /**
- * Coordena o corpo Android e o único estado persistente da Noémia.
- *
- * A fonte de verdade é o snapshot devolvido pelo núcleo cognitivo local.
- * O Android não mantém uma segunda cópia de necessidades, fase ou pulsos.
+ * Coordena o corpo Android e o estado persistente da Noémia.
+ * Experiências são registadas numa memória episódica local para continuidade.
  */
 class RuntimeCoordinator(
     context: Context,
@@ -15,6 +13,7 @@ class RuntimeCoordinator(
     private val onAction: (action: String, payload: String) -> Unit = { _, _ -> },
 ) {
     private val store = NoemiaStore(context.applicationContext)
+    private val experienceStore = NoemiaExperienceStore(context.applicationContext)
 
     fun start() {
         val saved = store.load()
@@ -28,22 +27,47 @@ class RuntimeCoordinator(
 
     fun onPerception(kind: String, payload: JSONObject) {
         val decision = bridge.perceive(kind, payload)
+        val action = decision.optString("action", "none")
+        val actionPayload = decision.optString("action_payload", "")
+        val interpretation = decision.optString("interpretation", "")
+        val summary = when {
+            interpretation.isNotBlank() -> interpretation
+            payload.optString("text").isNotBlank() -> payload.optString("text")
+            else -> "Percepção recebida: $kind"
+        }
+        experienceStore.remember(kind, summary, action, actionPayload)
         dispatchDecision(decision)
         persist()
     }
 
     fun converse(text: String): String {
         val response = bridge.converse(text)
-        if (response.isNotBlank()) onAction("speak", response)
+        if (response.isNotBlank()) {
+            experienceStore.remember("conversation", "Utilizador: $text | Noémia: $response", "speak", response)
+            onAction("speak", response)
+        }
         persist()
         return response
     }
 
     fun internalCycle(activity: String = "reflect") {
         val decision = bridge.internalCycle(activity)
+        val focus = decision.optString("focus", "")
+        val drive = decision.optString("drive", "")
+        if (focus.isNotBlank() || drive.isNotBlank()) {
+            experienceStore.remember(
+                "internal.$activity",
+                "Impulso interno: $drive${if (focus.isNotBlank()) " — $focus" else ""}",
+                decision.optString("action", "none"),
+                decision.optString("action_payload", ""),
+            )
+        }
         dispatchDecision(decision)
         persist()
     }
+
+    fun recentExperiences(limit: Int = 20): List<NoemiaExperienceStore.Experience> =
+        experienceStore.recent(limit)
 
     private fun dispatchDecision(payload: JSONObject) {
         val action = payload.optString("action", "none")
@@ -54,7 +78,7 @@ class RuntimeCoordinator(
     fun persist() {
         store.save(
             JSONObject()
-                .put("schema_version", 3)
+                .put("schema_version", 4)
                 .put("runtime", bridge.snapshot())
         )
     }
