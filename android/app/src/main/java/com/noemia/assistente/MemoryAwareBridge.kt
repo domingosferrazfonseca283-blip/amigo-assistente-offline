@@ -2,7 +2,7 @@ package com.noemia.assistente
 
 import org.json.JSONObject
 
-/** Ponte local provisória que já preserva e recupera memória de longo prazo. */
+/** Ponte local que preserva e recupera memória de longo prazo. */
 class MemoryAwareBridge(private val memory: LongTermMemoryStore) : CognitiveBridge {
     private var turnCount = 0
     private var lastInput = ""
@@ -18,14 +18,21 @@ class MemoryAwareBridge(private val memory: LongTermMemoryStore) : CognitiveBrid
         memory.restore(snapshot.optJSONObject("long_term_memory"))
     }
 
-    override fun perceive(kind: String, payload: JSONObject) {
+    override fun perceive(kind: String, payload: JSONObject): JSONObject {
         if (kind == "user_input") {
             val text = payload.optString("text", "").trim()
             if (text.isNotEmpty()) {
                 lastInput = text
-                memory.addEpisode("Entrada do utilizador: $text", JSONObject().put("kind", kind), 0.8)
+                memory.addEpisode(
+                    "Entrada do utilizador: $text",
+                    JSONObject().put("kind", kind),
+                    0.8,
+                )
             }
         }
+        return JSONObject()
+            .put("kind", kind)
+            .put("accepted", kind == "user_input" && lastInput.isNotEmpty())
     }
 
     override fun converse(text: String): String {
@@ -41,14 +48,17 @@ class MemoryAwareBridge(private val memory: LongTermMemoryStore) : CognitiveBrid
         }
     }
 
-    override fun internalCycle(activity: String) {
+    override fun internalCycle(activity: String): JSONObject {
         internalCycleCount++
         lastInternalActivity = activity
         memory.addEpisode(
             "Ciclo interno: $activity",
             JSONObject().put("type", "internal_cognition").put("cycle", internalCycleCount),
-            0.35
+            0.35,
         )
+        return JSONObject()
+            .put("activity", activity)
+            .put("cycle", internalCycleCount)
     }
 
     override fun snapshot(): JSONObject = JSONObject()
