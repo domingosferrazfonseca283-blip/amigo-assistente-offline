@@ -1,36 +1,35 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
+
+from memory import MemoryKind, MemorySystem
 
 
 class LocalMemory:
-    """Memória simples e persistente em JSON, totalmente local."""
+    """Adaptador de compatibilidade para a memória persistente da entidade.
 
-    def __init__(self, path: str | Path = "memory/memory.json") -> None:
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.items: list[dict[str, Any]] = self._load()
+    O armazenamento real é o MemorySystem/SQLite. Esta classe mantém a API
+    antiga da camada de aplicação sem criar uma segunda memória concorrente.
+    """
 
-    def _load(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-        except (OSError, json.JSONDecodeError):
-            return []
+    def __init__(self, memory: MemorySystem | None = None) -> None:
+        self.memory = memory or MemorySystem.local()
 
     def add(self, role: str, content: str) -> None:
-        self.items.append({"role": role, "content": content})
-        self.save()
+        self.memory.remember(
+            content,
+            kind=MemoryKind.EPISODIC,
+            metadata={"role": role},
+        )
 
     def recent(self, limit: int = 12) -> list[dict[str, Any]]:
-        return self.items[-limit:]
-
-    def save(self) -> None:
-        self.path.write_text(
-            json.dumps(self.items, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        records = self.memory.recent(limit=limit, kind=MemoryKind.EPISODIC)
+        return [
+            {
+                "role": str(record.metadata.get("role", "unknown")),
+                "content": record.content,
+                "id": record.id,
+                "created_at": record.created_at,
+            }
+            for record in reversed(records)
+        ]
