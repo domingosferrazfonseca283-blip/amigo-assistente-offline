@@ -27,8 +27,8 @@ private:
     std::string focus_;
     std::string last_perception_kind_;
     std::string visual_interpretation_;
-    std::string last_action_ = "none";
-    long long last_action_ms_ = 0;
+    std::string pending_action_ = "none";
+    std::string pending_action_payload_;
     long long last_tick_ms_ = 0;
 };
 
