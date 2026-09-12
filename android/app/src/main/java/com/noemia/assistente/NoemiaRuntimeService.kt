@@ -25,9 +25,14 @@ class NoemiaRuntimeService : Service() {
     override fun onCreate() {
         super.onCreate()
         startForegroundRuntime()
-        coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge())
-        coordinator.start()
         voiceOutput = NoemiaVoiceOutput(applicationContext)
+        coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge()) { action, payload ->
+            when (action) {
+                "speak" -> if (payload.isNotBlank()) voiceOutput.speak(payload)
+                "vibrate" -> payload.toLongOrNull()?.let(::vibrate)
+            }
+        }
+        coordinator.start()
         internalScheduler = InternalCognitionScheduler(onCycle = { coordinator.internalCycle("observe") })
         internalScheduler.start()
 
