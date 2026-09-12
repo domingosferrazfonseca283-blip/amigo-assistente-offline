@@ -1,8 +1,8 @@
 package com.noemia.assistente
 
+import com.google.mlkit.genai.common.FeatureStatus
 import com.google.mlkit.genai.prompt.Generation
 import com.google.mlkit.genai.prompt.java.GenerativeModelFutures
-import com.google.mlkit.genai.prompt.java.FeatureStatus
 import java.util.concurrent.TimeUnit
 
 /**
