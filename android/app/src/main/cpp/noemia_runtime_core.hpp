@@ -4,7 +4,7 @@
 
 namespace noemia {
 
-// Estado mínimo persistente do ser digital. Não representa consciência humana.
+// Estado afetivo funcional persistente. Não representa emoções biológicas.
 class RuntimeCore {
 public:
     RuntimeCore();
@@ -20,6 +20,13 @@ private:
     double novelty_ = 0.30;
     double reflection_ = 0.40;
     double rest_ = 0.20;
+    double joy_ = 0.35;
+    double sadness_ = 0.05;
+    double affection_ = 0.45;
+    double fear_ = 0.05;
+    double frustration_ = 0.05;
+    double loneliness_ = 0.10;
+    double calmness_ = 0.65;
     std::string last_input_;
     std::string last_activity_ = "resting";
     std::string affect_state_ = "calm";
