@@ -4,5 +4,9 @@ package com.noemia.assistente
 object RuntimeHost {
     fun createTransport(): LocalRuntimeTransport = NativeLocalRuntimeTransport()
 
-    fun createBridge(): CognitiveBridge = ProtocolCognitiveBridge(createTransport())
+    fun createBridge(): CognitiveBridge =
+        ProtocolCognitiveBridge(
+            transport = createTransport(),
+            onDeviceModel = NoemiaOnDeviceModel(),
+        )
 }
