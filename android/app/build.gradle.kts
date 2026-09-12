@@ -41,4 +41,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
 }
