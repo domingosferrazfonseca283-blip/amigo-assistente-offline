@@ -14,6 +14,7 @@ private:
     long long turn_count_ = 0;
     long long internal_cycle_count_ = 0;
     long long experience_count_ = 0;
+    long long affective_learning_count_ = 0;
     long long sequence_ = 0;
     double connection_ = 0.50;
     double curiosity_ = 0.40;
@@ -27,6 +28,9 @@ private:
     double frustration_ = 0.05;
     double loneliness_ = 0.10;
     double calmness_ = 0.65;
+    double learned_trust_ = 0.50;
+    double learned_safety_ = 0.60;
+    double learned_warmth_ = 0.50;
     std::string last_input_;
     std::string last_activity_ = "resting";
     std::string affect_state_ = "calm";
@@ -34,6 +38,7 @@ private:
     std::string focus_;
     std::string last_perception_kind_;
     std::string visual_interpretation_;
+    std::string last_learning_outcome_;
     std::string pending_action_ = "none";
     std::string pending_action_payload_;
     long long last_tick_ms_ = 0;
