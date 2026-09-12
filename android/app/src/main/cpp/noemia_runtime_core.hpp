@@ -25,6 +25,8 @@ private:
     std::string affect_state_ = "calm";
     std::string phase_ = "resting";
     std::string focus_;
+    std::string last_perception_kind_;
+    std::string visual_interpretation_;
     long long last_tick_ms_ = 0;
 };
 
