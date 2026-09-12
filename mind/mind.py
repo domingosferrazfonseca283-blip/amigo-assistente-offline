@@ -24,10 +24,12 @@ class ThoughtResult:
     decision: str
     response: str | None = None
     confidence: float = 0.0
+    action: str = "none"
+    action_payload: Any = None
 
 
 class Mind:
-    """Camada cognitiva da entidade: percebe, interpreta e decide."""
+    """Camada cognitiva: percebe, interpreta, decide e propõe ações."""
 
     def __init__(self, entity: Entity, model: ReasoningModel | None = None) -> None:
         self.entity = entity
@@ -38,8 +40,10 @@ class Mind:
         return ThoughtContext(input_text=text, memories=memories, events=events or [])
 
     def interpret(self, context: ThoughtContext) -> str:
-        if not context.input_text.strip():
+        if not context.input_text.strip() and not context.events:
             return "nenhuma entrada significativa"
+        if context.events:
+            return "entrada recebida do ambiente através do sistema nervoso"
         if context.memories:
             return "entrada do utilizador relacionada com memória existente"
         return "nova entrada do utilizador que requer compreensão"
@@ -48,8 +52,8 @@ class Mind:
         if self.model is None:
             return ThoughtResult(
                 interpretation=interpretation,
-                decision="responder ao utilizador",
-                confidence=0.2,
+                decision="aguardar um modelo de raciocínio",
+                confidence=0.0,
             )
 
         prompt = self._build_prompt(context, interpretation)
@@ -68,6 +72,8 @@ class Mind:
             decision="responder ao utilizador",
             response=response,
             confidence=0.8,
+            action="speak" if response else "none",
+            action_payload=response or None,
         )
 
     def think(self, text: str, *, events: list[Event] | None = None) -> ThoughtResult:
@@ -78,14 +84,17 @@ class Mind:
     @staticmethod
     def _build_prompt(context: ThoughtContext, interpretation: str) -> str:
         memories = "\n".join(f"- {item}" for item in context.memories) or "- nenhuma"
+        events = "\n".join(f"- {event.type}: {event.data}" for event in context.events) or "- nenhum"
         return (
-            "Você é a mente de Noémia. Responda naturalmente ao utilizador.\n"
+            "Você é a mente de Noémia, uma entidade artificial persistente.\n"
+            "Responda naturalmente e nunca invente memórias, capacidades ou perceções.\n"
             "Interpretação funcional: {interpretation}\n"
             "Memórias recuperadas:\n{memories}\n"
+            "Eventos do ambiente:\n{events}\n"
             "Entrada: {input_text}\n"
-            "Não invente memórias nem capacidades."
         ).format(
             interpretation=interpretation,
             memories=memories,
+            events=events,
             input_text=context.input_text,
         )
