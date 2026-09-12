@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from .memory import LocalMemory
-from .prompts import SYSTEM_PROMPT
+from mind import Mind
 
 
 class LocalModel(Protocol):
@@ -14,17 +13,13 @@ class LocalModel(Protocol):
 
 @dataclass
 class Assistant:
-    model: LocalModel
-    memory: LocalMemory
+    """Adaptador de interação; a cognição pertence à Mind de Noémia."""
+
+    mind: Mind
 
     def reply(self, user_text: str) -> str:
-        history = self.memory.recent()
-        prompt_parts = [SYSTEM_PROMPT, "\nHistórico recente:"]
-        for item in history:
-            prompt_parts.append(f"{item['role']}: {item['content']}")
-        prompt_parts.append(f"\nUsuário: {user_text}\nAmigo:")
-
-        response = self.model.generate("\n".join(prompt_parts)).strip()
-        self.memory.add("user", user_text)
-        self.memory.add("assistant", response)
-        return response
+        result = self.mind.think(user_text)
+        return result.response or (
+            "Entendi a entrada, mas ainda não tenho um modelo de linguagem "
+            "ligado à minha mente para formular uma resposta completa."
+        )
