@@ -58,7 +58,15 @@ class AgencyEngine:
     """Transforma objetivos em planos sem inventar capacidades ou permissões."""
 
     def __init__(self) -> None:
-        self.capabilities: dict[str, ActionCapability] = {}
+        self.capabilities: dict[str, ActionCapability] = {
+            "internal_reflection": ActionCapability(
+                name="internal_reflection",
+                description="Refletir sobre o próximo passo de um objetivo sem atuar externamente.",
+                risk=ActionRisk.NONE,
+                permission=PermissionMode.ALLOW,
+                background_allowed=True,
+            )
+        }
         self.plans: dict[str, Plan] = {}
 
     def register_capability(self, capability: ActionCapability) -> None:
