@@ -11,44 +11,43 @@ import android.os.Vibrator
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 
-/** Corpo Android: hospeda o núcleo cognitivo local e liga sensores reais ao runtime. */
+/** Corpo Android: hospeda o núcleo cognitivo local e liga sentidos reais ao runtime. */
 class NoemiaRuntimeService : Service() {
     private lateinit var coordinator: RuntimeCoordinator
     private lateinit var internalScheduler: InternalCognitionScheduler
     private lateinit var voiceOutput: NoemiaVoiceOutput
     private lateinit var bodySensors: AndroidBodySensors
+    private lateinit var microphone: AndroidMicrophone
+    private lateinit var camera: AndroidCamera
 
     override fun onCreate() {
         super.onCreate()
         startForegroundRuntime()
-
         coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge())
         coordinator.start()
         voiceOutput = NoemiaVoiceOutput(applicationContext)
-
-        internalScheduler = InternalCognitionScheduler(
-            onCycle = { coordinator.internalCycle("observe") },
-        )
+        internalScheduler = InternalCognitionScheduler(onCycle = { coordinator.internalCycle("observe") })
         internalScheduler.start()
 
-        bodySensors = AndroidBodySensors(applicationContext) { kind, payload ->
+        val perceive: (String, JSONObject) -> Unit = { kind, payload ->
             internalScheduler.externalActivity()
             coordinator.onPerception(kind, payload)
         }
+        bodySensors = AndroidBodySensors(applicationContext, perceive)
+        microphone = AndroidMicrophone(applicationContext, perceive)
+        camera = AndroidCamera(applicationContext, perceive)
         bodySensors.start()
+        microphone.start()
+        camera.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_PERCEIVE -> {
-                internalScheduler.externalActivity()
-                val kind = intent.getStringExtra(EXTRA_KIND) ?: "system"
-                val text = intent.getStringExtra(EXTRA_TEXT) ?: ""
-                coordinator.onPerception(kind, JSONObject().put("text", text))
-            }
-            ACTION_INTERNAL_CYCLE -> coordinator.internalCycle(
-                intent.getStringExtra(EXTRA_ACTIVITY) ?: "reflect"
+            ACTION_PERCEIVE -> coordinator.onPerception(
+                intent.getStringExtra(EXTRA_KIND) ?: "system",
+                JSONObject().put("text", intent.getStringExtra(EXTRA_TEXT) ?: "")
             )
+            ACTION_INTERNAL_CYCLE -> coordinator.internalCycle(intent.getStringExtra(EXTRA_ACTIVITY) ?: "reflect")
             ACTION_SNAPSHOT -> coordinator.persist()
             ACTION_SPEAK -> voiceOutput.speak(intent.getStringExtra(EXTRA_SPEECH_TEXT) ?: "")
             ACTION_STOP_SPEAKING -> voiceOutput.stop()
@@ -58,6 +57,8 @@ class NoemiaRuntimeService : Service() {
     }
 
     override fun onDestroy() {
+        camera.stop()
+        microphone.stop()
         bodySensors.stop()
         internalScheduler.stop()
         voiceOutput.shutdown()
@@ -69,29 +70,22 @@ class NoemiaRuntimeService : Service() {
 
     private fun vibrate(durationMs: Long) {
         val duration = durationMs.coerceIn(1L, 2_000L)
-        val vibrator = getSystemService(Vibrator::class.java) ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(android.os.VibrationEffect.createOneShot(duration, 80))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(duration)
+        getSystemService(Vibrator::class.java)?.let { vibrator ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(android.os.VibrationEffect.createOneShot(duration, 80))
+            } else {
+                @Suppress("DEPRECATION") vibrator.vibrate(duration)
+            }
         }
     }
 
     private fun startForegroundRuntime() {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Vida interna da Noémia",
-                    NotificationManager.IMPORTANCE_LOW,
-                ).apply {
-                    description = "Núcleo cognitivo local persistente"
-                },
-            )
+            manager.createNotificationChannel(NotificationChannel(
+                CHANNEL_ID, "Vida interna da Noémia", NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "Núcleo cognitivo local persistente" })
         }
-
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("Noémia está presente")
@@ -99,7 +93,6 @@ class NoemiaRuntimeService : Service() {
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
-
         startForeground(NOTIFICATION_ID, notification)
     }
 
