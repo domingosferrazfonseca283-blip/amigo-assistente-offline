@@ -1,42 +1,57 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol
 
 
-@dataclass(frozen=True)
-class Sense:
-    """Percepção abstrata produzida por um sentido do corpo."""
-
-    kind: str
-    data: Any
-    timestamp: float
-    source: str
-
-
-class Vision(Protocol):
-    def capture(self) -> Sense: ...
+class Sense(str, Enum):
+    VISION = "vision"
+    HEARING = "hearing"
+    TOUCH = "touch"
+    MOTION = "motion"
+    LOCATION = "location"
+    LIGHT = "light"
+    PROXIMITY = "proximity"
+    TEMPERATURE = "temperature"
 
 
-class Hearing(Protocol):
-    def listen(self, seconds: float | None = None) -> Sense: ...
+class Actuator(str, Enum):
+    SPEECH = "speech"
+    DISPLAY = "display"
+    VIBRATION = "vibration"
+    CAMERA = "camera"
+    NOTIFICATION = "notification"
 
 
-class Speech(Protocol):
-    def speak(self, text: str) -> None: ...
+class BodyAdapter(Protocol):
+    """Implementação do corpo num dispositivo concreto."""
+
+    def has_sense(self, sense: Sense) -> bool: ...
+    def sense(self, sense: Sense) -> Any: ...
+    def can_act(self, actuator: Actuator) -> bool: ...
+    def act(self, actuator: Actuator, payload: Any = None) -> Any: ...
 
 
-class Vibration(Protocol):
-    def vibrate(self, duration_ms: int = 100) -> None: ...
+@dataclass
+class Body:
+    """Corpo universal. Não conhece Android, iOS ou hardware específico."""
 
+    adapter: BodyAdapter
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-class Body(Protocol):
-    """Contrato que qualquer dispositivo pode implementar."""
+    def senses(self) -> list[Sense]:
+        return [sense for sense in Sense if self.adapter.has_sense(sense)]
 
-    def available_senses(self) -> set[str]: ...
+    def capabilities(self) -> list[Actuator]:
+        return [actuator for actuator in Actuator if self.adapter.can_act(actuator)]
 
-    def available_capabilities(self) -> set[str]: ...
+    def perceive(self, sense: Sense) -> Any:
+        if not self.adapter.has_sense(sense):
+            raise RuntimeError(f"Sentido indisponível neste corpo: {sense.value}")
+        return self.adapter.sense(sense)
 
-    def sense(self, name: str, **kwargs: Any) -> Sense: ...
-
-    def act(self, name: str, **kwargs: Any) -> Any: ...
+    def act(self, actuator: Actuator, payload: Any = None) -> Any:
+        if not self.adapter.can_act(actuator):
+            raise RuntimeError(f"Capacidade indisponível neste corpo: {actuator.value}")
+        return self.adapter.act(actuator, payload)

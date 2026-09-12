@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, asdict
 from typing import Any
 
 
 @dataclass
 class EntityState:
-    """Estado persistente e funcional da entidade, independente do hardware."""
+    """Estado interno transitório da entidade.
+
+    Estes valores não afirmam emoções reais; representam variáveis funcionais
+    que podem influenciar percepção, atenção, iniciativa e comportamento.
+    """
 
     mode: str = "awake"
-    mood: str = "calm"
-    energy: float = 1.0
     attention: float = 0.5
-    last_active_at: str | None = None
-    internal: dict[str, Any] = field(default_factory=dict)
+    energy: float = 1.0
+    mood: float = 0.0
+    social_drive: float = 0.5
 
-    def touch(self) -> None:
-        self.last_active_at = datetime.now(timezone.utc).isoformat()
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
-    def set_energy(self, value: float) -> None:
-        self.energy = max(0.0, min(1.0, value))
+    def clamp(self) -> None:
+        self.attention = max(0.0, min(1.0, self.attention))
+        self.energy = max(0.0, min(1.0, self.energy))
+        self.mood = max(-1.0, min(1.0, self.mood))
+        self.social_drive = max(0.0, min(1.0, self.social_drive))

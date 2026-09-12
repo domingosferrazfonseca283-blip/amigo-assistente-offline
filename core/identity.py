@@ -5,21 +5,18 @@ from typing import Any
 
 
 @dataclass
-class EntityIdentity:
-    """Identidade da entidade; não depende do modelo nem do dispositivo."""
+class Identity:
+    """Identidade persistente da entidade, independente do corpo/hardware."""
 
-    entity_id: str = "amigo"
-    name: str = "Amigo"
+    entity_id: str
+    name: str
     version: int = 1
-    traits: dict[str, Any] = field(default_factory=lambda: {
-        "role": "companion",
-        "relationship": "exclusive_user",
-    })
+    traits: dict[str, Any] = field(default_factory=dict)
 
-    def snapshot(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "entity_id": self.entity_id,
             "name": self.name,
             "version": self.version,
-            "traits": dict(self.traits),
+            "traits": self.traits,
         }

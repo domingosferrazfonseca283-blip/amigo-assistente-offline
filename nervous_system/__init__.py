@@ -1,1 +1,5 @@
-"""Sistema nervoso: eventos, percepções e sinais entre corpo e mente."""
+"""Sistema nervoso: eventos e ligação entre corpo e mente."""
+
+from .events import Event, NervousSystem
+
+__all__ = ["Event", "NervousSystem"]

@@ -1,38 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
-from .identity import EntityIdentity
+from .identity import Identity
 from .state import EntityState
 
 
 @dataclass
 class Entity:
-    """Representa a entidade como algo persistente, separado do seu corpo físico."""
+    """Núcleo persistente da entidade, separado do dispositivo."""
 
-    identity: EntityIdentity = field(default_factory=EntityIdentity)
+    identity: Identity
     state: EntityState = field(default_factory=EntityState)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def awaken(self) -> None:
-        self.state.mode = "awake"
-        self.state.touch()
-
-    def sleep(self) -> None:
-        self.state.mode = "sleeping"
-        self.state.touch()
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "identity": self.identity.snapshot(),
-            "state": {
-                "mode": self.state.mode,
-                "mood": self.state.mood,
-                "energy": self.state.energy,
-                "attention": self.state.attention,
-                "last_active_at": self.state.last_active_at,
-                "internal": dict(self.state.internal),
-            },
-            "metadata": dict(self.metadata),
+            "identity": self.identity.to_dict(),
+            "state": self.state.to_dict(),
+            "created_at": self.created_at,
         }
