@@ -36,12 +36,19 @@ class Mind:
         self.model = model
 
     def perceive(self, text: str, *, events: list[Event] | None = None) -> ThoughtContext:
-        memories = [record.content for record in self.entity.recall(text, limit=8)]
-        return ThoughtContext(input_text=text, memories=memories, events=events or [])
+        normalized = text.strip()
+        memories = [record.content for record in self.entity.recall(normalized, limit=8)] if normalized else []
+        return ThoughtContext(input_text=normalized, memories=memories, events=events or [])
 
     def interpret(self, context: ThoughtContext) -> str:
-        if not context.input_text.strip() and not context.events:
+        if not context.input_text and not context.events:
             return "nenhuma entrada significativa"
+        if any(event.type.startswith("vision.") for event in context.events):
+            return "entrada visual recebida do ambiente através do sistema nervoso"
+        if any(event.type.startswith("speech.") for event in context.events):
+            return "fala recebida do ambiente e convertida em texto"
+        if any(event.type.startswith("hearing.") for event in context.events):
+            return "atividade acústica recebida através da audição"
         if context.events:
             return "entrada recebida do ambiente através do sistema nervoso"
         if context.memories:
@@ -58,10 +65,16 @@ class Mind:
 
         prompt = self._build_prompt(context, interpretation)
         response = self.model.generate(prompt).strip()
-        self.entity.remember(
-            context.input_text,
-            metadata={"source": "mind", "role": "user"},
-        )
+        if context.input_text:
+            self.entity.remember(
+                context.input_text,
+                metadata={"source": "mind", "role": "user"},
+            )
+        for event in context.events:
+            if event.type in {"speech.final", "vision.interpretation"}:
+                content = str(event.data.get("text") or event.data.get("description") or "").strip()
+                if content:
+                    self.entity.remember(content, metadata={"source": "perception", "event": event.type})
         if response:
             self.entity.remember(
                 response,
@@ -69,9 +82,9 @@ class Mind:
             )
         return ThoughtResult(
             interpretation=interpretation,
-            decision="responder ao utilizador",
+            decision="responder ao utilizador" if response else "processar perceção",
             response=response,
-            confidence=0.8,
+            confidence=0.8 if response else 0.0,
             action="speak" if response else "none",
             action_payload=response or None,
         )
