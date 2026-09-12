@@ -17,6 +17,7 @@ class AutonomyPolicy:
 
     enabled: bool = True
     observe_when_idle: bool = True
+    max_events_per_cycle: int = 4
     max_actions_per_cycle: int = 1
     minimum_attention: float = 0.15
 
@@ -34,7 +35,7 @@ class AutonomyResult:
 
 @dataclass
 class AutonomyEngine:
-    """Executa ciclos curtos de autonomia sem assumir consciência ou vontade real."""
+    """Executa ciclos de autonomia sem assumir consciência ou vontade real."""
 
     entity: Entity
     mind: Mind
@@ -42,6 +43,7 @@ class AutonomyEngine:
     runtime: Runtime = field(default_factory=Runtime)
     policy: AutonomyPolicy = field(default_factory=AutonomyPolicy)
     observer: Callable[[], list[Event]] | None = None
+    action_sink: Callable[[str, Any], Any] | None = None
 
     def start(self) -> None:
         self.entity.wake()
@@ -59,18 +61,24 @@ class AutonomyEngine:
         self.runtime.tick()
         observed = False
         if self.policy.observe_when_idle and self.observer is not None:
-            for event in self.observer()[: self.policy.max_actions_per_cycle]:
+            for event in self.observer()[: self.policy.max_events_per_cycle]:
                 self.nervous_system.emit(event)
             observed = True
 
-        before = self.nervous_system.dispatch()
         events: list[Event] = []
-        if self.observer is not None:
-            # Events emitted by the observer have already passed through the queue;
-            # autonomy records their count without owning the hardware itself.
-            events = []
+        while self.nervous_system._queue and len(events) < self.policy.max_events_per_cycle:
+            events.append(self.nervous_system._queue.pop(0))
 
-        if before == 0:
+        # Ações geradas anteriormente nunca devem voltar a alimentar a própria
+        # cognição neste ciclo, evitando loops act -> think -> act.
+        cognitive_events = [event for event in events if not event.type.startswith("act.")]
+        for event in events:
+            for handler in self.nervous_system._handlers.get(event.type, []):
+                handler(event)
+            for handler in self.nervous_system._handlers.get("*", []):
+                handler(event)
+
+        if not events:
             self.runtime.idle()
             return AutonomyResult(timestamp, self.entity.lifecycle.state.value, observed, 0)
 
@@ -78,10 +86,19 @@ class AutonomyEngine:
             self.policy.minimum_attention,
             min(1.0, self.entity.state.attention + 0.05),
         )
+
+        thought = self.mind.think("", events=cognitive_events)
+        action = thought.action or "none"
+        payload = thought.action_payload
+        if action != "none" and self.action_sink is not None:
+            self.action_sink(action, payload)
+
         return AutonomyResult(
             timestamp,
             self.entity.lifecycle.state.value,
             observed,
-            before,
-            decision="processar eventos recebidos",
+            len(events),
+            decision=thought.decision,
+            action=action,
+            action_payload=payload,
         )
