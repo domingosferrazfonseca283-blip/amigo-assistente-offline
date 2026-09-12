@@ -1,12 +1,14 @@
 package com.noemia.assistente
 
-/** Seleciona explicitamente o hospedeiro do núcleo cognitivo. */
+/** Instala as capacidades cognitivas locais no runtime da Noémia. */
 object RuntimeHost {
     fun createTransport(): LocalRuntimeTransport = NativeLocalRuntimeTransport()
 
-    fun createBridge(): CognitiveBridge =
+    fun createOnDeviceModel(): NoemiaOnDeviceModel = NoemiaOnDeviceModel()
+
+    fun createBridge(onDeviceModel: NoemiaOnDeviceModel = createOnDeviceModel()): CognitiveBridge =
         ProtocolCognitiveBridge(
             transport = createTransport(),
-            onDeviceModel = NoemiaOnDeviceModel(),
+            onDeviceModel = onDeviceModel,
         )
 }
