@@ -88,6 +88,8 @@ std::string RuntimeCore::execute(const std::string& request_json) {
             affect_state_ = extract_string(request_json, "affect_state");
             phase_ = extract_string(request_json, "phase");
             focus_ = extract_string(request_json, "current_focus");
+            last_perception_kind_ = extract_string(request_json, "last_perception_kind");
+            visual_interpretation_ = extract_string(request_json, "visual_interpretation");
             last_tick_ms_ = now_ms();
         }
 
@@ -103,6 +105,8 @@ std::string RuntimeCore::execute(const std::string& request_json) {
         out << ",\"last_activity\":\"" << json_escape(last_activity_) << "\"";
         out << ",\"affect_state\":\"" << json_escape(affect_state_) << "\"";
         out << ",\"current_focus\":\"" << json_escape(focus_) << "\"";
+        out << ",\"last_perception_kind\":\"" << json_escape(last_perception_kind_) << "\"";
+        out << ",\"visual_interpretation\":\"" << json_escape(visual_interpretation_) << "\"";
         out << ",\"needs\":{\"connection\":" << connection_;
         out << ",\"curiosity\":" << curiosity_ << ",\"novelty\":" << novelty_;
         out << ",\"reflection\":" << reflection_ << ",\"rest\":" << rest_ << "}";
@@ -131,13 +135,42 @@ std::string RuntimeCore::execute(const std::string& request_json) {
         ++experience_count_;
         ++sequence_;
         last_input_ = extract_string(request_json, "text");
+        last_perception_kind_ = extract_string(request_json, "kind");
         last_activity_ = "perceiving";
         affect_state_ = "attentive";
         phase_ = "perceiving";
         focus_ = "entrada recebida";
-        connection_ = clamp01(connection_ - 0.08);
-        curiosity_ = clamp01(curiosity_ - 0.03);
-        return "{\"ok\":true,\"payload\":{\"accepted\":true,\"experience_count\":" + std::to_string(experience_count_) + "},\"error\":null,\"request_id\":\"" + json_escape(request_id) + "\"}";
+
+        if (last_perception_kind_ == "vision.analysis") {
+            const double brightness = clamp01(extract_double(request_json, "brightness", 0.5));
+            const double contrast = clamp01(extract_double(request_json, "contrast", 0.0));
+            const double spatial_variation = clamp01(extract_double(request_json, "spatial_variation", 0.0));
+
+            if (brightness < 0.18) visual_interpretation_ = "cena predominantemente escura";
+            else if (brightness > 0.82) visual_interpretation_ = "cena predominantemente clara";
+            else visual_interpretation_ = "cena com luminosidade intermédia";
+
+            if (contrast > 0.45) visual_interpretation_ += ", com contraste elevado";
+            else if (contrast < 0.12) visual_interpretation_ += ", com contraste baixo";
+
+            if (spatial_variation > 0.20) visual_interpretation_ += ", com variação espacial significativa";
+            focus_ = "percepção visual: " + visual_interpretation_;
+            phase_ = "interpreting";
+            novelty_ = clamp01(novelty_ + 0.05 + spatial_variation * 0.10);
+            curiosity_ = clamp01(curiosity_ + 0.03 + contrast * 0.05);
+            rest_ = clamp01(rest_ - 0.01);
+        } else {
+            connection_ = clamp01(connection_ - 0.02);
+            curiosity_ = clamp01(curiosity_ + 0.01);
+        }
+
+        std::ostringstream out;
+        out << std::fixed << std::setprecision(4);
+        out << "{\"ok\":true,\"payload\":{\"accepted\":true,\"experience_count\":" << experience_count_;
+        out << ",\"kind\":\"" << json_escape(last_perception_kind_) << "\"";
+        out << ",\"interpretation\":\"" << json_escape(visual_interpretation_) << "\"";
+        out << ",\"phase\":\"" << phase_ << "\"},\"error\":null,\"request_id\":\"" << json_escape(request_id) << "\"}";
+        return out.str();
     }
 
     if (is_internal) {
@@ -162,6 +195,9 @@ std::string RuntimeCore::execute(const std::string& request_json) {
         if (connection_ > strongest) { strongest = connection_; drive = "aproximação"; phase_ = "reflecting"; focus_ = "verificar continuidade da relação"; }
         if (novelty_ > strongest) { strongest = novelty_; drive = "novidade"; phase_ = "reflecting"; focus_ = "procurar uma experiência ou informação nova"; }
         if (curiosity_ > strongest) { strongest = curiosity_; drive = "curiosidade"; phase_ = "reflecting"; focus_ = "explorar algo ainda não compreendido"; }
+        if (!visual_interpretation_.empty() && novelty_ > 0.55) {
+            focus_ = "revisar a última percepção visual: " + visual_interpretation_;
+        }
 
         last_activity_ = "reflecting";
         affect_state_ = "calm";
