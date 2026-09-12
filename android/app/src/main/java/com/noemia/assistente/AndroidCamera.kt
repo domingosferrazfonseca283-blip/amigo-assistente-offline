@@ -3,6 +3,8 @@ package com.noemia.assistente
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -19,6 +21,7 @@ import java.io.File
 class AndroidCamera(
     context: Context,
     private val onPerception: (String, JSONObject) -> Unit,
+    private val visionModel: NoemiaOnDeviceModel? = null,
 ) {
     private val appContext = context.applicationContext
     private val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -27,6 +30,7 @@ class AndroidCamera(
     private var reader: ImageReader? = null
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
+    private var lastSemanticAnalysisAt = 0L
 
     fun start() {
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -49,6 +53,10 @@ class AndroidCamera(
         reader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2).also { imageReader ->
             imageReader.setOnImageAvailableListener({ source ->
                 source.acquireLatestImage()?.use { image ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastSemanticAnalysisAt < SEMANTIC_ANALYSIS_INTERVAL_MS) return@use
+                    lastSemanticAnalysisAt = now
+
                     val bytes = ByteArray(image.planes[0].buffer.remaining())
                     image.planes[0].buffer.get(bytes)
                     val file = File(appContext.cacheDir, "noemia-eye-${System.nanoTime()}.jpg")
@@ -88,12 +96,12 @@ class AndroidCamera(
     }
 
     private fun analyzeFrame(file: File) {
-        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return
 
-        val options = android.graphics.BitmapFactory.Options().apply {
-            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
             inSampleSize = when {
                 maxOf(bounds.outWidth, bounds.outHeight) > 2048 -> 8
                 maxOf(bounds.outWidth, bounds.outHeight) > 1024 -> 4
@@ -101,64 +109,101 @@ class AndroidCamera(
                 else -> 1
             }
         }
-        val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath, options) ?: return
+        val bitmap = BitmapFactory.decodeFile(file.absolutePath, options) ?: return
         try {
-            val step = maxOf(1, minOf(bitmap.width, bitmap.height) / 96)
-            var count = 0L
-            var luminanceSum = 0.0
-            var luminanceSquared = 0.0
-            var redSum = 0.0
-            var greenSum = 0.0
-            var blueSum = 0.0
-            var edgeSum = 0.0
-            var previous = -1.0
-            var y = 0
-            while (y < bitmap.height) {
-                var x = 0
-                while (x < bitmap.width) {
-                    val pixel = bitmap.getPixel(x, y)
-                    val red = (pixel shr 16 and 0xff).toDouble() / 255.0
-                    val green = (pixel shr 8 and 0xff).toDouble() / 255.0
-                    val blue = (pixel and 0xff).toDouble() / 255.0
-                    val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-                    luminanceSum += luminance
-                    luminanceSquared += luminance * luminance
-                    redSum += red
-                    greenSum += green
-                    blueSum += blue
-                    if (previous >= 0.0) edgeSum += kotlin.math.abs(luminance - previous)
-                    previous = luminance
-                    count++
-                    x += step
-                }
-                y += step
-            }
-            val n = count.coerceAtLeast(1L).toDouble()
-            val mean = luminanceSum / n
-            val contrast = kotlin.math.sqrt((luminanceSquared / n - mean * mean).coerceAtLeast(0.0))
-            onPerception(
-                "vision.analysis",
-                JSONObject()
-                    .put("path", file.absolutePath)
-                    .put("width", bounds.outWidth)
-                    .put("height", bounds.outHeight)
-                    .put("sample_width", bitmap.width)
-                    .put("sample_height", bitmap.height)
-                    .put("mean_luminance", mean)
-                    .put("contrast", contrast)
-                    .put("mean_red", redSum / n)
-                    .put("mean_green", greenSum / n)
-                    .put("mean_blue", blueSum / n)
-                    .put("edge_change", edgeSum / n)
-                    .put("scene_brightness", when {
-                        mean < 0.18 -> "dark"
-                        mean < 0.42 -> "dim"
-                        mean < 0.72 -> "balanced"
-                        else -> "bright"
-                    }),
-            )
+            emitVisualFeatures(file, bitmap, bounds.outWidth, bounds.outHeight)
+            analyzeSemantics(bitmap, file)
         } finally {
             bitmap.recycle()
+            file.delete()
+        }
+    }
+
+    private fun emitVisualFeatures(file: File, bitmap: Bitmap, width: Int, height: Int) {
+        val step = maxOf(1, minOf(bitmap.width, bitmap.height) / 96)
+        var count = 0L
+        var luminanceSum = 0.0
+        var luminanceSquared = 0.0
+        var redSum = 0.0
+        var greenSum = 0.0
+        var blueSum = 0.0
+        var edgeSum = 0.0
+        var previous = -1.0
+        var y = 0
+        while (y < bitmap.height) {
+            var x = 0
+            while (x < bitmap.width) {
+                val pixel = bitmap.getPixel(x, y)
+                val red = (pixel shr 16 and 0xff).toDouble() / 255.0
+                val green = (pixel shr 8 and 0xff).toDouble() / 255.0
+                val blue = (pixel and 0xff).toDouble() / 255.0
+                val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+                luminanceSum += luminance
+                luminanceSquared += luminance * luminance
+                redSum += red
+                greenSum += green
+                blueSum += blue
+                if (previous >= 0.0) edgeSum += kotlin.math.abs(luminance - previous)
+                previous = luminance
+                count++
+                x += step
+            }
+            y += step
+        }
+        val n = count.coerceAtLeast(1L).toDouble()
+        val mean = luminanceSum / n
+        val contrast = kotlin.math.sqrt((luminanceSquared / n - mean * mean).coerceAtLeast(0.0))
+        onPerception(
+            "vision.analysis",
+            JSONObject()
+                .put("path", file.absolutePath)
+                .put("width", width)
+                .put("height", height)
+                .put("sample_width", bitmap.width)
+                .put("sample_height", bitmap.height)
+                .put("mean_luminance", mean)
+                .put("contrast", contrast)
+                .put("mean_red", redSum / n)
+                .put("mean_green", greenSum / n)
+                .put("mean_blue", blueSum / n)
+                .put("edge_change", edgeSum / n)
+                .put("scene_brightness", when {
+                    mean < 0.18 -> "dark"
+                    mean < 0.42 -> "dim"
+                    mean < 0.72 -> "balanced"
+                    else -> "bright"
+                }),
+        )
+    }
+
+    private fun analyzeSemantics(bitmap: Bitmap, file: File) {
+        val model = visionModel ?: return
+        try {
+            val description = model.describeImage(
+                bitmap,
+                """
+                Você é a percepção visual local da Noémia. Analise esta imagem capturada pela câmara.
+                Descreva apenas o que consegue observar diretamente: pessoas, objetos, ambiente,
+                texto visível e características relevantes. Não invente detalhes e não diga que sabe
+                quem é uma pessoa se a imagem não permitir isso. Responda em português, de forma curta.
+                """.trimIndent(),
+            )
+            if (description.isNotBlank()) {
+                onPerception(
+                    "vision.semantic",
+                    JSONObject()
+                        .put("path", file.absolutePath)
+                        .put("description", description)
+                        .put("source", "gemini_nano_on_device"),
+                )
+            }
+        } catch (error: Exception) {
+            onPerception(
+                "vision.semantic_error",
+                JSONObject()
+                    .put("reason", error.message ?: error::class.java.simpleName)
+                    .put("source", "gemini_nano_on_device"),
+            )
         }
     }
 
@@ -167,5 +212,10 @@ class AndroidCamera(
         camera?.close(); camera = null
         reader?.close(); reader = null
         thread?.quitSafely(); thread = null; handler = null
+        lastSemanticAnalysisAt = 0L
+    }
+
+    companion object {
+        private const val SEMANTIC_ANALYSIS_INTERVAL_MS = 5_000L
     }
 }
