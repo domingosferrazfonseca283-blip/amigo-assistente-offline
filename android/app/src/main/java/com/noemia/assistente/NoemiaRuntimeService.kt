@@ -19,6 +19,8 @@ class NoemiaRuntimeService : Service() {
     private lateinit var bodySensors: AndroidBodySensors
     private lateinit var microphone: AndroidMicrophone
     private lateinit var camera: AndroidCamera
+    private lateinit var speechRecognizer: NoemiaSpeechRecognizer
+    private lateinit var visionAnalyzer: NoemiaVisionAnalyzer
 
     override fun onCreate() {
         super.onCreate()
@@ -36,6 +38,14 @@ class NoemiaRuntimeService : Service() {
         bodySensors = AndroidBodySensors(applicationContext, perceive)
         microphone = AndroidMicrophone(applicationContext, perceive)
         camera = AndroidCamera(applicationContext, perceive)
+        speechRecognizer = NoemiaSpeechRecognizer(applicationContext) { kind, payload ->
+            perceive(kind, payload)
+            if (kind == "speech.final") {
+                val text = payload.optString("text").trim()
+                if (text.isNotEmpty()) coordinator.converse(text)
+            }
+        }
+        visionAnalyzer = NoemiaVisionAnalyzer(perceive)
         bodySensors.start()
         microphone.start()
         camera.start()
@@ -48,6 +58,9 @@ class NoemiaRuntimeService : Service() {
                 JSONObject().put("text", intent.getStringExtra(EXTRA_TEXT) ?: "")
             )
             ACTION_INTERNAL_CYCLE -> coordinator.internalCycle(intent.getStringExtra(EXTRA_ACTIVITY) ?: "reflect")
+            ACTION_START_LISTENING -> speechRecognizer.start(intent.getStringExtra(EXTRA_LANGUAGE) ?: "pt-PT")
+            ACTION_STOP_LISTENING -> speechRecognizer.stop()
+            ACTION_ANALYZE_FRAME -> intent.getStringExtra(EXTRA_FRAME_PATH)?.let { visionAnalyzer.analyze(java.io.File(it)) }
             ACTION_SNAPSHOT -> coordinator.persist()
             ACTION_SPEAK -> voiceOutput.speak(intent.getStringExtra(EXTRA_SPEECH_TEXT) ?: "")
             ACTION_STOP_SPEAKING -> voiceOutput.stop()
@@ -60,6 +73,7 @@ class NoemiaRuntimeService : Service() {
         camera.stop()
         microphone.stop()
         bodySensors.stop()
+        speechRecognizer.shutdown()
         internalScheduler.stop()
         voiceOutput.shutdown()
         coordinator.persist()
@@ -99,6 +113,9 @@ class NoemiaRuntimeService : Service() {
     companion object {
         const val ACTION_PERCEIVE = "com.noemia.assistente.PERCEIVE"
         const val ACTION_INTERNAL_CYCLE = "com.noemia.assistente.INTERNAL_CYCLE"
+        const val ACTION_START_LISTENING = "com.noemia.assistente.START_LISTENING"
+        const val ACTION_STOP_LISTENING = "com.noemia.assistente.STOP_LISTENING"
+        const val ACTION_ANALYZE_FRAME = "com.noemia.assistente.ANALYZE_FRAME"
         const val ACTION_SNAPSHOT = "com.noemia.assistente.SNAPSHOT"
         const val ACTION_SPEAK = "com.noemia.assistente.SPEAK"
         const val ACTION_STOP_SPEAKING = "com.noemia.assistente.STOP_SPEAKING"
@@ -106,6 +123,8 @@ class NoemiaRuntimeService : Service() {
         const val EXTRA_KIND = "kind"
         const val EXTRA_TEXT = "text"
         const val EXTRA_ACTIVITY = "activity"
+        const val EXTRA_LANGUAGE = "language"
+        const val EXTRA_FRAME_PATH = "frame_path"
         const val EXTRA_SPEECH_TEXT = "speech_text"
         const val EXTRA_DURATION_MS = "duration_ms"
         private const val CHANNEL_ID = "noemia_runtime"
