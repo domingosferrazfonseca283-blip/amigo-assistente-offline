@@ -3,10 +3,7 @@ package com.noemia.assistente
 import android.content.Context
 import org.json.JSONObject
 
-/**
- * Coordena o corpo Android e o estado persistente da Noémia.
- * Experiências são registadas numa memória episódica local para continuidade.
- */
+/** Coordena o corpo Android, memória episódica e estado afetivo persistente da Noémia. */
 class RuntimeCoordinator(
     context: Context,
     private val bridge: CognitiveBridge,
@@ -26,7 +23,15 @@ class RuntimeCoordinator(
     }
 
     fun onPerception(kind: String, payload: JSONObject) {
-        val decision = bridge.perceive(kind, payload)
+        val history = experienceStore.recent(20)
+        val enriched = JSONObject(payload.toString())
+            .put("history_count", history.size)
+            .put("history_conversation_count", history.count { it.kind == "conversation" })
+            .put("history_visual_count", history.count { it.kind == "vision.analysis" })
+            .put("history_action_count", history.count { it.action != "none" })
+            .put("history_vibration_count", history.count { it.action == "vibrate" })
+            .put("history_failure_count", history.count { it.summary.contains("falha", ignoreCase = true) || it.summary.contains("erro", ignoreCase = true) })
+        val decision = bridge.perceive(kind, enriched)
         val action = decision.optString("action", "none")
         val actionPayload = decision.optString("action_payload", "")
         val interpretation = decision.optString("interpretation", "")
