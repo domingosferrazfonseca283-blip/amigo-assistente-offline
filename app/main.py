@@ -2,37 +2,27 @@ from __future__ import annotations
 
 from core.entity import Entity
 from core.identity import Identity
+from intelligence import ModelRouter
 from memory import MemorySystem
 from mind import Mind
 
 from .assistant import Assistant
 
 
-class DemoLocalModel:
-    """Backend local mínimo enquanto um modelo real não estiver configurado."""
-
-    def generate(self, prompt: str) -> str:
-        return (
-            "Sou a Noémia. A minha mente está ligada ao núcleo persistente, "
-            "à memória e ao ciclo da entidade, mas ainda preciso de um modelo "
-            "de linguagem real para conversar de forma inteligente."
-        )
-
-
 def create_noemia() -> tuple[Entity, Assistant]:
-    """Constrói Noémia e liga identidade, memória, mente e interação."""
+    """Constrói Noémia com identidade, memória, mente e inteligência real."""
     identity = Identity.load_or_create()
     memory = MemorySystem.local()
     entity = Entity(identity=identity, memory=memory)
     entity.wake()
 
-    mind = Mind(entity=entity, model=DemoLocalModel())
+    mind = Mind(entity=entity, model=ModelRouter.from_environment())
     return entity, Assistant(mind=mind)
 
 
 def main() -> None:
     entity, assistant = create_noemia()
-    print(f"{entity.identity.name} — offline. Digite 'sair' para terminar.")
+    print(f"{entity.identity.name} — online para raciocínio local/online. Digite 'sair' para terminar.")
 
     while True:
         try:
@@ -49,7 +39,11 @@ def main() -> None:
         if not user_text:
             continue
 
-        print(f"{entity.identity.name}: {assistant.reply(user_text)}")
+        try:
+            response = assistant.reply(user_text)
+        except RuntimeError as exc:
+            response = f"Não consegui aceder a um modelo de linguagem neste momento: {exc}"
+        print(f"{entity.identity.name}: {response}")
 
 
 if __name__ == "__main__":
