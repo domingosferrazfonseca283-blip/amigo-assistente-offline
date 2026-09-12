@@ -3,9 +3,9 @@ from __future__ import annotations
 from core.entity import Entity
 from core.identity import Identity
 from memory import MemorySystem
+from mind import Mind
 
 from .assistant import Assistant
-from .memory import LocalMemory
 
 
 class DemoLocalModel:
@@ -13,23 +13,21 @@ class DemoLocalModel:
 
     def generate(self, prompt: str) -> str:
         return (
-            "Sou a Noémia. O meu núcleo persistente está ativo localmente, "
-            "mas ainda preciso de um modelo de linguagem real para conversar de forma inteligente."
+            "Sou a Noémia. A minha mente está ligada ao núcleo persistente, "
+            "à memória e ao ciclo da entidade, mas ainda preciso de um modelo "
+            "de linguagem real para conversar de forma inteligente."
         )
 
 
 def create_noemia() -> tuple[Entity, Assistant]:
-    """Constrói a entidade Noémia e liga a aplicação à sua memória persistente."""
+    """Constrói Noémia e liga identidade, memória, mente e interação."""
     identity = Identity.load_or_create()
     memory = MemorySystem.local()
     entity = Entity(identity=identity, memory=memory)
     entity.wake()
 
-    assistant = Assistant(
-        model=DemoLocalModel(),
-        memory=LocalMemory(memory),
-    )
-    return entity, assistant
+    mind = Mind(entity=entity, model=DemoLocalModel())
+    return entity, Assistant(mind=mind)
 
 
 def main() -> None:
