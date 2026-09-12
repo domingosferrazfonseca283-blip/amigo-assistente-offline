@@ -22,21 +22,20 @@ class NoemiaRuntimeService : Service() {
         super.onCreate()
         startForegroundRuntime()
 
-        // Núcleo local: identidade/estado/memória permanecem no runtime persistente.
         coordinator = RuntimeCoordinator(applicationContext, RuntimeHost.createBridge())
         coordinator.start()
-
         voiceOutput = NoemiaVoiceOutput(applicationContext)
-        bodySensors = AndroidBodySensors(applicationContext) { kind, payload ->
-            internalScheduler.externalActivity()
-            coordinator.onPerception(kind, payload)
-        }
-        bodySensors.start()
 
         internalScheduler = InternalCognitionScheduler(
             onCycle = { coordinator.internalCycle("observe") },
         )
         internalScheduler.start()
+
+        bodySensors = AndroidBodySensors(applicationContext) { kind, payload ->
+            internalScheduler.externalActivity()
+            coordinator.onPerception(kind, payload)
+        }
+        bodySensors.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
