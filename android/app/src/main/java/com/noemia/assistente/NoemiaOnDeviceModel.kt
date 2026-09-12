@@ -3,9 +3,9 @@ package com.noemia.assistente
 import android.graphics.Bitmap
 import com.google.mlkit.genai.common.FeatureStatus
 import com.google.mlkit.genai.prompt.Generation
+import com.google.mlkit.genai.prompt.GenerateContentRequest
 import com.google.mlkit.genai.prompt.ImagePart
 import com.google.mlkit.genai.prompt.TextPart
-import com.google.mlkit.genai.prompt.generateContentRequest
 import com.google.mlkit.genai.prompt.java.GenerativeModelFutures
 import java.util.concurrent.TimeUnit
 
@@ -33,10 +33,10 @@ class NoemiaOnDeviceModel {
     /** Analisa uma imagem localmente no dispositivo, sem enviar a imagem para a rede. */
     fun describeImage(bitmap: Bitmap, prompt: String): String {
         requireAvailable()
-        val request = generateContentRequest(
+        val request = GenerateContentRequest.Builder(
             ImagePart(bitmap),
             TextPart(prompt),
-        )
+        ).build()
         val response = futures.generateContent(request).get(120, TimeUnit.SECONDS)
         return response.candidates.firstOrNull()?.text?.trim().orEmpty()
     }
