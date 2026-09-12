@@ -46,6 +46,7 @@ class NoemiaRuntimeService : Service() {
             }
         }
         visionAnalyzer = NoemiaVisionAnalyzer(perceive)
+
         bodySensors.start()
         microphone.start()
         camera.start()
