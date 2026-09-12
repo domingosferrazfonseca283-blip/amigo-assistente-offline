@@ -1,7 +1,4 @@
-"""Core da entidade artificial."""
+from .lifecycle import Lifecycle, LifecycleController
+from .runtime import Runtime
 
-from .entity import Entity
-from .identity import Identity
-from .state import EntityState
-
-__all__ = ["Entity", "Identity", "EntityState"]
+__all__ = ["Lifecycle", "LifecycleController", "Runtime"]
